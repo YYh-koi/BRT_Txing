@@ -10,3 +10,9 @@ amt630hv100-freertos/proj/brlink/
 *.pbd
 *.wsp
 *.wsd
+
+# Serial debug logs
+brt_aud3_sdk_freertos/Debug/**/*.txt
+brt_aud3_sdk_freertos/Debug/*.txt
+brt_aud3_sdk_freertos/Debug/**/*.log
+brt_aud3_sdk_freertos/Debug/*.log

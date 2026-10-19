@@ -1,0 +1,52 @@
+CC=arm-linux-gcc
+TARGET=libbt_platform.so
+
+INCLUDEDIR=-I./tl -I./tl/uartif -I./ -I./auto_app/ -I./auto_app/gatt/ -I./auto_app/rfcomm/ -I../stack/include/ -I../stack/xmlparse/
+
+ifeq ($(CONFIG_TL_BCSP), y)
+SRC= $(wildcard *.c ./auto_app/*.c ./auto_app/gatt/*.c ./tl/*.c ./tl/bcspif/*.c)
+else
+SRC= $(wildcard *.c ./auto_app/*.c ./auto_app/gatt/*.c ./tl/*.c ./tl/uartif/*.c)
+endif
+
+#SPP_FILES :=   ./auto_app/rfcomm/app_rfcomm.mak    \
+                ./auto_app/rfcomm/a_rfcomm.c        \
+                ./auto_app/rfcomm/a_rfcomm.h        \
+                ./auto_app/rfcomm/btsdk_rfcomm_c    \
+                ./auto_app/rfcomm/rfcomm_slot.c     \
+                ./auto_app/rfcomm/rfcomm_slot.h     \
+                ./auto_app/rfcomm/rfcomm_socket.c   \
+                ./auto_app/rfcomm/rfcomm_socket.h   \
+                ./auto_app/rfcomm/rfcomm_stream.c   \
+                ./auto_app/rfcomm/rfcomm_stream.h   \
+                ./auto_app/rfcomm/rfcomm_thread.c   \
+                ./auto_app/rfcomm/rfcomm_thread.h
+
+#SRC:= $(filter-out $(SPP_FILES), $(SRC));
+SRC += ./auto_app/rfcomm/app_rfcomm.c
+SRC += ./auto_app/rfcomm/app_rfcomm_sdp.c
+
+$(warning "SRC:" $(SRC))
+
+DIR=$(notdir $(SRC))
+
+OBJS=$(patsubst %.c,%.o,$(DIR))
+
+LIBS=-L/usr/lib -lbrlink 
+
+#all: $(TARGET)
+#$(TARGET): $(OBJS) 
+#	$(CC) $^ -fPIC -shared -lm -o $@ 
+#	cp  $@ ~/Shared/lib
+#	sudo mv $@ /usr/lib
+	
+#$(OBJS): $(SRC)
+#	$(CC) -c $(SRC) $(INCLUDEDIR) 
+
+all: $(TARGET)
+$(TARGET): $(SRC)
+	$(CC) -g $^ -fPIC -shared $(CFLAGS) $(INCLUDEDIR) -o $@ $(LIBS)
+	cp $@ ~/Shared/lib/     
+	sudo mv $@ /usr/lib
+clean:
+	rm -f *.o ./tl/*.o ./tl/bcspif/*.o ./tl/uartif/*.o ./auto_app/*.o ./auto_app/gatt/*.o ./auto_app/rfcomm/*.o ~/Shared/lib/libbt_platform.so 

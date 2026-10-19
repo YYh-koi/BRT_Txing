@@ -1,0 +1,451 @@
+#include "porting.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <semaphore.h>
+//#include "sysdep.h"
+#include "tl.h"
+#include "bt_debug.h"
+#include "porting_utils.h"
+#include "upio.h"
+#include "bt_vendor_rtk.h"
+#include "userial_vendor.h"
+#include "bt_hci_lib.h"
+#include "uart.h"
+#include "brlinkd.h"
+#include "bt_event.h"
+
+//#define LOG_DATA
+//#define DEDICATED_READ_THREAD
+
+#ifdef DEDICATED_READ_THREAD
+#define MAX_RX_SIZE 4096
+#define MAX_OUT_BUF_SIZE 8192
+#else
+#define MAX_RX_SIZE 4096
+#endif
+
+#define MAX_LINE_LEN 1024
+#define PORT_STILL_OPENING -1
+#define PORT_PATH_ERROR -2
+#define PORT_OPEN_FAILED -3
+#define PORT_OPEN_SUCCESS 1
+#define PORT_CLOSE_SUCCESS 2
+#define PORT_NOT_OPENED -4
+
+#define FC_NONE         0x00
+#define FC_DTRDSR       0x01
+#define FC_RTSCTS       0x02
+#define FC_XONXOFF      0x04
+
+#define OPEN_PORT_RETRY 50
+
+#define BRT_DBG(fmt, args...)  bse_print_va("h5if", " %s: " fmt, __FUNCTION__ , ##args)
+
+//static int m_hdev = 0;
+UartPort_t *bt_uart_uap;
+static sem_t  m_sem_data_thread;
+static sem_t  m_sem_data_thread_start;
+static sem_t  m_sem_data_exit;
+static int m_sem_thread_init = 0;
+
+static unsigned char s_rx_buf[MAX_RX_SIZE];
+
+#ifdef DEDICATED_READ_THREAD
+static sem_t  m_sem_data_builder;
+static sem_t  m_sem_data_builder_thread;
+static sem_t  m_sem_data_builder_exit;
+static unsigned char s_out_buf[MAX_OUT_BUF_SIZE];
+static unsigned char s_work_buf[MAX_OUT_BUF_SIZE];
+pthread_mutex_t s_rx_buf_mutex;
+static int s_bytes_in_buf;
+static void* packet_build_thread(void *param);
+#endif
+static void start_read_thread();
+
+static tl_data_received_cb s_data_received_cb = 0;
+static transport_layer_callbacks_t *s_vendor_cbs = 0;
+
+static const tUSERIAL_CFG userial_init_cfg = {
+	(USERIAL_DATABITS_8 | USERIAL_PARITY_EVEN | USERIAL_STOPBITS_1),
+	USERIAL_BAUD_115200,
+	USERIAL_HW_FLOW_CTRL_OFF
+};
+
+static void set_uart_iosetting()
+{
+	BRT_DBG("Leave set_uart_iosetting \r\n");
+}
+
+int read_port(unsigned char *buf, unsigned long len)
+{
+    return iUartRead(bt_uart_uap, buf, len, pdMS_TO_TICKS(5));
+}
+
+static void rx_data_thread_proc(void *lParam)
+{
+	int count = 0;
+	int remain, r, rc;
+	BRT_DBG("Enter rx_data_thread_proc \r\n");
+	sem_post(&m_sem_data_thread_start);
+
+	while (sem_trywait(&m_sem_data_exit)) {
+		if ((count = read_port(s_rx_buf, MAX_RX_SIZE)) == -1) {
+			BRT_DBG("rxDataThread return -1.\n");
+			break;
+		}
+
+		if (count == 0) {
+			continue;
+		}
+
+#ifndef DEDICATED_READ_THREAD
+#ifdef LOG_DATA
+		BRT_DBG("UART Receive Data:%d \r\n", count);
+		debug_print_data("Received", s_rx_buf, count);
+#endif
+		if (s_data_received_cb) {
+			s_data_received_cb(s_rx_buf, (size_t) count);
+		}
+#endif
+	}
+
+	sem_post(&m_sem_data_thread);
+	vTaskDelete(NULL);
+	BRT_DBG("Leave rx_data_thread_proc \r\n");
+	//return NULL;
+}
+
+#ifdef DEDICATED_READ_THREAD
+static void* packet_build_thread(void *param)
+{
+	int len;
+	while (sem_trywait(&m_sem_data_builder_exit)) {
+		sem_wait(&m_sem_data_builder);
+		pthread_mutex_lock(&s_rx_buf_mutex);
+		memcpy(s_work_buf, s_out_buf, s_bytes_in_buf);
+		len = s_bytes_in_buf;
+		s_bytes_in_buf = 0;
+		pthread_mutex_unlock(&s_rx_buf_mutex);
+#ifdef LOG_DATA
+		BRT_DBG("UART Receive Data:%d \r\n", len);
+		debug_print_data("Received", s_work_buf, len);
+#endif
+		if (s_data_received_cb) {
+			s_data_received_cb(s_work_buf, (size_t) len);
+		}
+	}
+
+	sem_post(&m_sem_data_builder_thread);
+	return NULL;
+}
+#endif
+
+
+int open_port(tl_data_received_cb cb)
+{
+	s_data_received_cb = cb;
+
+	userial_vendor_init();
+	BRT_DBG("%s - enter...", __FUNCTION__);
+	if (!m_sem_thread_init) {
+		switch (hw_get_bt_module()) {
+		case BRT_MODULE_CHIP_RTL:
+			bt_uart_uap = userial_vendor_open(115200);
+			start_read_thread();
+			break;
+		case BRT_MODULE_CHIP_AIC:
+			bt_uart_uap = userial_vendor_open(921600);
+			start_read_thread();
+			break;
+		case BRT_MODULE_CHIP_BRT:
+			bt_uart_uap = userial_vendor_open(115200);
+			break;
+		case BRT_MODULE_CHIP_GT:
+			bt_uart_uap = userial_vendor_open(921600);
+			break;
+		default:
+			bt_uart_uap = userial_vendor_open(115200);
+			start_read_thread();
+			break;
+		}
+		return PORT_OPEN_SUCCESS;
+	}
+	return PORT_STILL_OPENING;
+}
+
+static void start_read_thread()
+{
+		sem_init(&m_sem_data_thread_start, 0, 0);
+		sem_init(&m_sem_data_exit, 0, 0);
+		sem_init(&m_sem_data_thread, 0, 0);
+#ifdef DEDICATED_READ_THREAD
+		sem_init(&m_sem_data_builder_thread, 0, 0);
+		sem_init(&m_sem_data_builder, 0, 0);
+		sem_init(&m_sem_data_builder_exit, 0, 0);
+		pthread_mutex_init(&s_rx_buf_mutex, NULL);
+#endif
+#if 0
+		pthread_attr_t thread_attr;
+		pthread_t newthread;
+		pthread_attr_init(&thread_attr);
+		pthread_attr_setstacksize(&thread_attr, 128 * 1024);
+
+		//brcm_patch(m_hdev);
+		int ret = pthread_create(&newthread, &thread_attr, rx_data_thread_proc, NULL);		
+
+		if (ret != 0) {
+			BRT_DBG("pthread_create _rx_data_thread_proc() err!");
+			vUartClose(bt_uart_uap);
+			return -1;
+		}
+
+		pthread_detach(newthread);
+#else
+		xTaskCreate(
+            rx_data_thread_proc,
+            "rx_data_thread_proc",
+            1024 * 8,
+            NULL,
+            configMAX_PRIORITIES/2,
+            NULL
+		);
+#endif
+
+#ifdef DEDICATED_READ_THREAD
+		pthread_t buildthread;
+		ret = pthread_create(&buildthread, &thread_attr, packet_build_thread, NULL);
+		if (ret != 0) {
+			BRT_DBG("pthread_create _rx_data_thread_proc() err!");
+			close(m_hdev);
+			return -1;
+		}
+		pthread_detach(buildthread);
+#endif
+		sem_wait(&m_sem_data_thread_start);
+		m_sem_thread_init = 1;
+BRT_DBG("%s - end...", __FUNCTION__);
+}
+
+static void exit_thread_proc(void *arg)
+{
+	if (bt_uart_uap != NULL) {
+		sem_post(&m_sem_data_exit);
+#ifdef DEDICATED_READ_THREAD
+		sem_post(&m_sem_data_builder_exit);
+		sem_post(&m_sem_data_builder);
+#endif
+		sem_wait(&m_sem_data_thread);
+#ifdef DEDICATED_READ_THREAD
+		sem_wait(&m_sem_data_builder_thread);
+#endif
+		userial_vendor_close();
+		memset(s_rx_buf, 0, MAX_RX_SIZE);
+		sem_destroy(&m_sem_data_thread_start);
+		sem_destroy(&m_sem_data_exit);
+		sem_destroy(&m_sem_data_thread);
+#ifdef DEDICATED_READ_THREAD
+		memset(s_out_buf, 0, MAX_OUT_BUF_SIZE);
+		memset(s_work_buf, 0, MAX_OUT_BUF_SIZE);
+		sem_destroy(&m_sem_data_builder);
+		sem_destroy(&m_sem_data_builder_exit);
+		sem_destroy(&m_sem_data_builder_thread);
+		pthread_mutex_destroy(&s_rx_buf_mutex);
+#endif
+		m_sem_thread_init = 0;
+		vTaskDelete(NULL);
+		//return (void *) PORT_CLOSE_SUCCESS;
+	}
+
+	s_data_received_cb = 0;
+	vTaskDelete(NULL);
+	//return NULL;
+}
+
+int close_port()
+{
+#if 0
+	pthread_t exit_thread;
+	pthread_create(&exit_thread, NULL, exit_thread_proc, NULL);
+	pthread_detach(exit_thread);
+#else
+	xTaskCreate(
+   	 exit_thread_proc,
+   	 "exit_thread_proc",
+   	 2048,
+   	 NULL,
+   	 configMAX_PRIORITIES/4,
+   	 NULL
+  );
+#endif
+	return PORT_NOT_OPENED;
+}
+
+static int is_reset_command(unsigned char *buf, unsigned long len)
+{
+	if (buf == NULL || len < 4) {
+		return 0;
+	}
+
+	unsigned char tmp[4] = {0x01, 0x03, 0x0C, 0x00};
+	if (memcmp(buf, tmp, 4) == 0) {
+		return 1;
+	}
+
+	return 0;
+}
+
+int write_port(unsigned char *buf, unsigned long len)
+{
+	int written = 0;
+#ifdef LOG_DATA
+	debug_print_data("Send", buf, len);
+#endif
+	written = iUartWrite(bt_uart_uap, buf, len, pdMS_TO_TICKS(5));
+	if (written <= 0) {
+		BRT_DBG("%s write err bytes:%d.\n", __func__, written);
+	}
+
+	return written;
+}
+
+static void fwcfg_cb(bt_vendor_op_result_t result)
+{
+	int status = (result == BT_VND_OP_RESULT_SUCCESS) ? 0 : 1;
+
+    extern int CHIP_BARROT_H4_DONE;
+    if((result == CHIP_BARROT_H4_DONE) && (hw_get_bt_module() == BRT_MODULE_CHIP_BRT)) {
+	    start_read_thread();
+	    return;
+    }
+
+	if (s_vendor_cbs) {
+		s_vendor_cbs->fw_config_callback(status);
+	}
+}
+
+
+static int read_event_tl(UCHAR *buf, int *read_cnt)
+{	
+	int remain, r;
+	int count = 0;
+	int  retry_time = 0;
+
+	while (count < 3) {
+		r = read_port(buf, 3);
+		if (r <= 0) {
+			if(retry_time < 10) {
+				usleep(5 * 1000);
+				retry_time++;
+				continue;
+			} else {
+				BRT_DBG("%s, read head byte err = %d", __func__, r);
+				return -1;
+			}
+		}
+		count += r;
+	}
+	
+	remain = buf[2];
+	retry_time = 0;
+	while ((count - 3) < remain) {
+		r = read_port(buf + count, remain - (count - 3));
+		if (r <= 0 ) {
+			if(retry_time < 10) {
+				usleep(5 * 1000);
+				retry_time++;
+				continue;
+			} else {
+				BRT_DBG("%s, read date err = %d", __func__, r);
+				return -1;
+			}
+		}
+		count += r;
+	}
+	*read_cnt = count;
+	return count;
+}
+
+
+void patch_for_get_module_addr()
+{
+	UCHAR read_addr[] = {0x01, 0x09, 0x10, 0x00};
+	write_port(read_addr, sizeof(read_addr));
+	UCHAR addr_buf[13];
+	UINT8 bd_addr[18];
+	int len = 0;
+	read_event_tl(addr_buf, &len);
+	if( len == 13) {
+		BRT_DBG("addr:%02X %02X %02X %02X %02X %02X ", addr_buf[12], addr_buf[11], addr_buf[10], addr_buf[9], addr_buf[8], addr_buf[7]);
+		snprintf(bd_addr, sizeof(bd_addr), "%02X%02X%02X%02X%02X%02X", addr_buf[12], addr_buf[11], addr_buf[10], addr_buf[9], addr_buf[8], addr_buf[7]);
+		bt_event_indicate(BT_EV_OTHER_LOCAL_BD_IND, (void *)bd_addr);
+	} else {
+		BRT_DBG("read addr err",);
+	}
+}
+
+
+void tl_fw_config(void *param)
+{
+		switch (hw_get_bt_module()) {
+		case BRT_MODULE_CHIP_RTL:
+			hw_config_start();
+			break;
+		case BRT_MODULE_CHIP_AIC:
+			s_vendor_cbs->fw_config_callback(0);
+			break;
+		case BRT_MODULE_CHIP_BRT:
+			barrot_firmware_config(NULL, fwcfg_cb);
+			break;
+		case BRT_MODULE_CHIP_GT:
+			//patch_for_get_module_addr();
+			start_read_thread();
+			s_vendor_cbs->fw_config_callback(0);
+			break;
+		default:
+			s_vendor_cbs->fw_config_callback(0);
+			break;
+		}		
+}
+
+static void *alloc(int size, const char *file, int line)
+{
+	return (void *)H5_NEW_(size, file, line);
+}
+
+static void dealloc(void *p_buf, const char *file, int line)
+{
+	H5_FREE_(p_buf, file, line);
+}
+
+static uint8_t xmit_cb(uint16_t opcode, void *p_buf, tINT_CMD_CBACK p_cback)
+{
+	if (s_vendor_cbs) {
+		return s_vendor_cbs->send_internal_command((HC_BT_HDR *)p_buf, opcode, p_cback);
+	}
+
+	return 0;
+}
+
+static bt_vendor_callbacks_t vnd_cbacks = {
+	sizeof(bt_vendor_callbacks_t),
+	fwcfg_cb,
+	NULL,
+	NULL,
+	alloc,
+	dealloc,
+	xmit_cb,
+	NULL,
+};
+
+void tl_init_ex(transport_layer_callbacks_t *cbs)
+{
+    s_vendor_cbs = cbs;
+    if(hw_get_bt_module() == BRT_MODULE_CHIP_RTL) {
+        rtk_vendor_init(&vnd_cbacks);
+    } else if(hw_get_bt_module() == BRT_MODULE_CHIP_BRT) {
+       brt_vendor_init(&vnd_cbacks); 
+    }
+}
+

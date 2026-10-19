@@ -1,0 +1,14 @@
+
+ifeq ($(SERVER_PSEUDO_TTY),y)
+ifeq ($(USER_DEFINED_PSEUDO_TTY ),y)
+LOCAL_CFLAGS += -DUSER_DEFINED_PSEUDO_TTY
+endif
+LOCAL_CFLAGS += -DSERVER_PSEUDO_TTY
+endif
+
+TL_SRC_FILES := bt_vendor_rtk.c userial_vendor.c tl.c #upio.c
+
+#module_patch
+LOCAL_CFLAGS += -DHCI_USE_RTK_H5
+LOCAL_CFLAGS += -DRTL_8723BS_BT_USED
+

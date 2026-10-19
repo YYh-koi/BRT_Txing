@@ -1,0 +1,939 @@
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*
+* Copyright (c) 1999-2014 BARROT Corporation
+*
+* All rights reserved.
+*
+---------------------------------------------------------------------------*/
+
+/**********************************************************************
+*	File Name:		bt_functions.c
+*
+*	Description:
+*
+*
+*	Create Date:		2014/08/02
+***********************************************************************/
+
+/* Base */
+#include "include.h"
+#include "brt_trace.h"
+#include "btinit.h"
+#include "bt_event.h"
+#include "bt_manager.h"
+#include "bt_functions.h"
+#include "profiles_def.h"
+#include "gatt/auto_gatt_client.h"
+
+#define TAG "bse_func"
+#ifdef CONFIG_SPP_ANDROID
+#include "debug_utils.h"
+#endif
+#include "bt_power_manager.h"
+#include "auto_at.h"
+#include "auto_at_internal.h"
+#include "auto_gap.h"
+#include "porting.h"
+#include "vendor_interface.h"
+#include "bt_audio_hw.h"
+#include "transport_tl.h"
+
+#ifdef CONFIG_SPP
+#include "app_rfcomm.h"
+#endif
+// TODO
+BOOL s_a2dp_mute = FALSE;
+//extern SYSTEM_LOCK s_a2dp_mute_lock;
+
+
+extern vendor_interface_t *g_vendor_itf;
+
+extern void ScheduleLoop(void);
+extern void TimerHandle(void);
+extern int do_set_debug_level(const char *param,unsigned short len);
+static bt_done_callback s_bt_done_cbk = NULL;
+
+extern void audio_sink_set_running();
+
+static void hlp_thread_disable_stack()
+{
+	BtDone();
+	bse_log_api(TAG, "[DONE] Done BtDone!\r\n");
+	if (s_bt_done_cbk != NULL) {
+		s_bt_done_cbk(TRUE);
+	}
+	//audio_sink_set_running();
+	s_bt_done_cbk = NULL;
+}
+
+void bt_init()
+{
+	BtInit();
+	bt_mgr_server_init(bt_event_indicate);
+	bt_mgr_server_start();
+}
+
+void bt_done(bt_done_callback callback)
+{
+	s_bt_done_cbk = callback;
+	bt_mgr_server_stop();
+	bt_mgr_server_done();
+
+	CREATE_THREAD(hlp_thread_disable_stack);
+	//hlp_thread_disable_stack();
+}
+
+void bt_reset()
+{
+	app_gap_reset_hardware();
+}
+
+void bt_action_on_bluetooth_enabled_ex()
+{
+	bt_action_on_bluetooth_enabled();
+}
+
+void bt_runloop_execute(void)
+{
+	at_process_internal();
+#ifdef CONFIG_APP_CREATE_THREADS
+	ScheduleLoop();
+#endif
+	TimerHandle();
+	TLHandle();
+}
+
+/* External Functions For Set And Get Configure */
+void bt_dev_get_pairied_device(void)
+{
+	hlp_manager_query_device_list();
+}
+
+void bt_dev_remove_device(UINT8 dest_index)
+{
+	hlp_manager_remove_device(dest_index);
+	app_gap_remove_bond(NULL);
+}
+
+void bt_remove_paired_device(UINT8 *bd_addr)
+{   
+    app_gap_remove_bond(bd_addr);
+}
+
+void bt_set_max_bond_devices(int value)
+{
+	hlp_set_max_bond_devices(value);
+}
+
+void bt_manager_set_local_device_name_ex(UINT8 *p_name)
+{
+	hlp_manager_set_local_device_name_ex(p_name);
+}
+
+void bt_dev_operate_local_name(UINT8 *p_name)
+{
+	if (p_name) {
+		printf("p_name = %s\n", p_name);
+		hlp_manager_set_local_device_name(p_name);
+		hlp_gap_set_local_device_name(p_name);
+		return ;
+	}
+	printf("hlp_manager_query_local_device_name\n");
+	hlp_manager_query_local_device_name();
+}
+
+void bt_manager_set_local_device_pin_ex(UINT8 *p_pincode)
+{
+	hlp_manager_set_local_device_pin(p_pincode);
+}
+
+void bt_dev_operate_local_pin(UINT8 *p_pincode)
+{
+// 	if(p_pincode != NULL) {
+// 		if (strlen(p_pincode) > 0) {
+// 			hlp_manager_set_local_device_pin(p_pincode);
+// 		} else {
+// 			hlp_manager_query_local_device_pin();
+// 		}
+// 	}
+	if(p_pincode)
+	{
+		hlp_manager_set_local_device_pin(p_pincode);
+		bt_event_indicate(BT_EV_EVENT_OK, NULL);
+	} else {
+		hlp_manager_query_local_device_pin();
+	}
+} 
+
+void bt_dev_set_mic_gain(UINT8 volume)
+{
+	g_vendor_itf->vendor_set_mic_gain((volume >= 25) ? 25 : volume);
+}
+
+void bt_dev_set_E2_audio(void)
+{
+	g_vendor_itf->vendor_update_audio_param();
+}
+
+void bt_vendor_wbs_config(BOOL val)
+{
+	if(g_vendor_itf->vendor_wbs_config) {
+		g_vendor_itf->vendor_wbs_config(val);
+	}
+}
+
+UINT8 bt_dev_get_mic_gain(void)
+{
+	g_vendor_itf->vendor_get_mic_gain();
+	// FIXME return what?
+	return 0;
+}
+
+void bt_start_discovery(int time_len, char type)
+{
+	app_gap_start_discovery(time_len, type);
+}
+
+void bt_cancel_discovery()
+{
+	app_gap_cancel_discovery();
+}
+
+UINT8 bt_is_discovering()
+{
+	return app_gap_is_discovering();
+}
+
+void bt_set_scan_mode(UINT8 mode)
+{
+	app_gap_set_scan_mode(mode);
+}
+
+void bt_get_scan_mode(void)
+{
+	app_gap_get_scan_mode();
+}
+
+UINT8 bt_get_scan_mode_ex(void)
+{
+	return app_gap_get_scan_mode_ex();
+}
+
+void bt_dev_get_local_bd(void)
+{
+	hlp_manager_query_local_device_bd_addr();
+}
+
+void bt_dev_get_local_le_bd(void)
+{
+	hlp_manager_query_local_device_le_bd_addr();
+}	
+
+void bt_dev_get_local_bd_ex(char *p)
+{
+	hlp_manager_get_local_device_bd_addr(p);
+}
+
+void bt_get_device_cod()
+{
+	UINT8 dcod[7] = {0};
+	//memcpy(dcod, app_get_device_cod(), 3);
+	char * p = app_get_device_cod();
+	snprintf(dcod, 6, "%02x%02x%02x", p[0], p[1], p[2]);
+	bt_event_indicate(BT_EV_GET_LOCAL_COD, dcod);
+}
+
+void bt_set_spp_mode(int mode)
+{
+	app_set_ssp_mode(mode);
+	//bt_event_indicate(BT_EV_SET_SPP_MODE, mode);
+}
+
+void bt_set_usr_pair_mode(int mode)
+{
+	app_set_usr_pair_mode(mode);
+	//bt_event_indicate(BT_EV_SET_SPP_MODE, mode);
+}
+
+void bt_set_ssp_cap_mode(int mode)
+{
+	app_set_ssp_cap_mode(mode);
+	//bt_event_indicate(BT_EV_SET_SPP_MODE, mode);
+}
+
+void bt_set_io_cap_mode(int mode)
+{
+	app_set_io_cap_mode(mode);
+	//bt_event_indicate(BT_EV_SET_SPP_MODE, mode);
+}
+
+void bt_dev_get_local_flag(void)
+{
+	hlp_manager_query_local_configure();
+}
+
+void bt_dev_set_local_auto_connect(UINT8 ctl)
+{
+	bt_manager_set_auto_ctl(ctl, APP_AUTO_CONTROL_FLAG_CONNECT);
+}
+
+void bt_dev_set_local_auto_answer(UINT8 ctl)
+{
+	bt_manager_set_auto_ctl(ctl, APP_AUTO_CONTROL_FLAG_ANSWER);
+}
+
+void bt_dev_set_local_volume(UINT8 volume)
+{
+	g_vendor_itf->vendor_set_local_volume(volume);
+}
+
+int bt_dev_get_local_volume(void)
+{
+	return g_vendor_itf->vendor_get_local_volume();
+}
+
+void bt_dev_bt_manager_bind_hfp_a2dp(BOOL bind)
+{
+	bt_manager_bind_hfp_a2dp(bind);
+}
+
+void bt_dev_bt_manager_bind_a2dp_avrcp(BOOL bind)
+{
+	bt_manager_bind_a2dp_avrcp(bind);
+}
+
+/* External Functions For HF */
+#ifdef CONFIG_HFP
+void bt_hf_set_pair_mode(UINT8 mode)
+{
+	app_gap_scan_mode_control(BT_SET_SCAN_MODE_TYPE_PAIR, mode);
+}
+
+void bt_get_config_hfp()
+{
+	app_get_config_hfp();
+}
+
+UINT8 bt_hf_connect(UINT8 index, UINT8 *bd)
+{
+	UINT8 err = BT_HF_REPLY_SUC;
+	UINT8 bd_addr[BD_ADDR_LEN];
+        bse_log_api(TAG,"%s\r\n",__FUNCTION__);
+	if (bd == NULL) {
+		if (app_dev_get_address(index, bd_addr) == 1) {
+			bd = bd_addr;
+		}
+	}
+
+	if (bd != NULL) {
+//		hlp_manager_set_last_device_bd_addr(bd);
+		if(app_hf_connect(bd) != 0) {
+			err = BT_HF_REPLY_STATUS_ERR;
+		}
+	} else {
+		err = BT_HF_REPLY_BD_ERR;
+	}
+
+	return err;
+}
+
+UINT8 bt_hf_disconnect(void)
+{
+	UINT8 err = BT_HF_REPLY_SUC;
+
+	if(hlp_hf_get_status() < ST_HF_CONNECTED) {
+		err = BT_HF_REPLY_STATUS_ERR;
+	} else {
+		if(app_hf_disconnect() != 0) {
+			err = BT_HF_REPLY_STATUS_ERR;
+		}
+	}
+
+	return err;
+}
+
+void bt_hf_answer_call(void)
+{
+	app_hf_answer_call();
+}
+
+void bt_hf_deny_call(void)
+{
+	app_hf_reject_call();
+}
+
+void bt_hf_hangup(void)
+{
+	app_hf_hangup();
+}
+
+void bt_hf_repeat(void)
+{
+	app_hf_redial();
+}
+
+void bt_hf_mute_micro_phone(unsigned int flag)
+{
+	g_vendor_itf->vendor_mic_control((UINT8) flag);
+}
+
+void bt_hf_switch_audio(void)
+{
+	app_hf_audio_transfer();
+}
+
+void bt_hf_set_micmute_stat(int flag)
+{
+#ifdef CONFIG_BT_AUDIO_CBK
+	app_set_micmute_stat(flag);
+#endif
+	bt_event_indicate(BT_EV_HF_MIC_MUTE, (void *)flag);
+}
+
+void bt_hf_speech_recognition(UINT8 ctl)
+{
+	app_hf_voice_recognition_req(ctl);
+}
+
+UINT8 bt_hf_dial(UINT8 *number)
+{
+	UINT8 err = BT_HF_REPLY_SUC;
+
+	if (strlen(number) < 43) {
+		app_hf_dial(number);
+	} else {
+		err = BT_HF_REPLY_NOT_SUPPORT;
+	}
+	// FIXME return err?
+	return err;
+}
+
+void bt_hf_send_dtmf(UINT8 *dtmf)
+{
+	UINT8 *p_dtmf = (UINT8 *)NEW(strlen(dtmf)+1);;
+
+	if (dtmf != NULL) {
+		strcpy(p_dtmf, dtmf);
+		app_hf_send_dtmf((void *)p_dtmf);
+	}
+	FREE(p_dtmf);
+}
+
+void bt_hf_query_status(void)
+{
+    app_hf_query_status();
+}
+#endif
+
+#ifdef CONFIG_A2DP
+UINT8 bt_a2dp_connect(UINT8 *bd)
+{
+	//TODO
+	UINT8 err = BT_A2DP_REPLY_SUC;
+
+	if (bd != NULL) {
+		if(app_a2dp_connect(bd) != 0) {
+			err = BT_A2DP_REPLY_STATUS_ERR;
+		}
+	} else {
+		err = BT_A2DP_REPLY_BD_ERR;
+	}
+
+	return err;
+}
+
+void bt_a2dp_connect_last(void)
+{
+	UINT8 bd[BD_ADDR_LEN];
+	if(app_dev_get_address(0, bd) != 0) {
+		app_a2dp_connect(bd);
+	}
+}
+
+UINT8 bt_a2dp_disconnect_current(void)
+{
+	if(app_a2dp_disconnect() == 0) {
+		return BT_A2DP_REPLY_SUC;
+	} else {
+		return BT_A2DP_REPLY_STATUS_ERR;
+	}
+}
+
+void bt_a2dp_query_status(void)
+{
+    app_a2dp_query_status();
+}
+
+void bt_a2dp_mute(BOOL ismute)
+{
+    bse_log_api(TAG,"bt_a2dp_mute : %d\r\n",ismute);
+    //ENTER_CRITICAL(s_a2dp_mute_lock);
+    s_a2dp_mute = ismute;
+    //LEAVE_CRITICAL(s_a2dp_mute_lock);
+	hlp_a2dp_event_mute(ismute);
+}
+
+#ifdef CONFIG_BIND_PROFILES
+void bt_a2dp_set_deny(UINT8 *bd_addr)
+{
+	bse_log_api(TAG, "%s", __func__);
+	if(bt_manager_get_binded_profiles()) {
+		app_a2dp_set_deny(bd_addr);
+		bt_event_indicate(BT_EV_EVENT_OK, NULL);
+	} else {
+		bt_event_indicate(BT_EV_EVENT_ERROR, NULL);
+	}
+	
+}
+
+void bt_a2dp_cannel_deny()
+{
+	bse_log_api(TAG, "%s", __func__);
+	if(bt_manager_get_binded_profiles()) {
+		app_a2dp_cannel_deny();
+		bt_event_indicate(BT_EV_EVENT_OK, NULL);
+	} else {
+		bt_event_indicate(BT_EV_EVENT_ERROR, NULL);
+	}
+}
+#endif
+
+#endif
+
+#ifdef CONFIG_AVRCP
+#ifdef CONFIG_BIND_PROFILES
+void bt_avrcp_connect_last(void)
+{
+	UINT8 bd[BD_ADDR_LEN];
+	if(bt_manager_get_binded_profiles()) {
+		if(app_dev_get_address(0, bd) != 0) {
+			app_avrcp_connect(bd);
+		}
+	}
+}
+
+void bt_avrcp_set_config(UINT8 param)
+{
+	app_avrcp_set_config(param);
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+}
+
+void bt_avrcp_get_config()
+{
+	app_avrcp_get_config();
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+}
+
+void bt_avrcp_connect(UINT8 *addr)
+{
+	app_avrcp_connect(addr);
+}
+
+void bt_avrcp_disconnect()
+{
+	app_avrcp_disconnect();
+}
+#endif
+
+void bt_avrcp_play_pause()
+{
+	app_avrcp_playpause();
+}
+
+#ifdef CONFIG_ABS_VOL
+void bt_avrcp_volume_up()
+{
+	app_avrcp_volume_up();
+}
+
+void bt_avrcp_volume_down()
+{
+	app_avrcp_volume_down();
+}
+
+void bt_avrcp_send_abs_vol(int abs_vol)
+{
+	app_send_abs_vol(hlp_avrcp_get_connected_bd(), 1/*default interim*/, abs_vol);
+}
+#endif
+
+void bt_avrcp_play(void)
+{
+	app_avrcp_send_command(AVRCP_CMD_OPID_PLAY);
+}
+
+void bt_avrcp_pause(void)
+{
+	bse_log_api(TAG,"app_avrcp_get_status() = %d\r\n", app_avrcp_get_status());
+	if(app_avrcp_get_status() != ST_APP_AVRCP_PAUSED)
+		app_avrcp_send_command(AVRCP_CMD_OPID_PAUSE);
+}
+
+void bt_avrcp_stop(void)
+{
+	app_avrcp_send_command(AVRCP_CMD_OPID_STOP);
+}
+
+void bt_avrcp_next(void)
+{
+	app_avrcp_send_command(AVRCP_CMD_OPID_FORWARD);
+}
+
+void bt_avrcp_previous(void)
+{
+	app_avrcp_send_command(AVRCP_CMD_OPID_BACKWARD);
+}
+void bt_avrcp_fast_forward(UINT8 op)
+{
+    app_avrcp_send_command_ex(AVRCP_CMD_OPID_FAST_FORWARD, op);
+}
+
+void bt_avrcp_fast_rewind(UINT8 op)
+{
+    app_avrcp_send_command_ex(AVRCP_CMD_OPID_REWIND, op);
+}
+
+void bt_avrcp_get_nowplaying_info(void)
+{
+	app_avrcp_get_nowplaying_info();
+}
+
+void bt_avrcp_get_nowplaying_list(UINT32 offset, UINT32 count)
+{
+	app_avrcp_get_nowplaying_list(offset, count);
+}
+
+void bt_avrcp_play_item(UINT8 *uid)
+{
+	app_avrcp_play_item(uid);
+}
+
+void bt_avrcp_set_player_app(UINT32 eID, UINT32 eValue)
+{
+	app_avrcp_set_player_app(eID, eValue);
+}
+
+void bt_avrcp_get_folder_list(UINT32 start_item, UINT32 end_item)
+{
+	app_avrcp_get_folder_list(start_item, end_item);
+}
+
+void bt_avrcp_change_path(UINT8 direction, UINT8 *folder_uid)
+{
+	app_avrcp_change_path(0x00, direction, folder_uid);
+}
+
+void bt_avrcp_get_play_status(void)
+{
+	app_avrcp_get_play_status();
+}
+
+void bt_avrcp_query_status(void)
+{
+	app_avrcp_quiry_status();
+}
+
+void bt_avrcp_bip_art()
+{
+	app_get_avrcp_bip_art();
+}
+#endif
+
+/* External Functions For BTC */
+#ifdef CONFIG_HID
+void bt_hid_connect(void)
+{
+	app_hid_connect(hlp_manager_get_last_device_bd_addr());
+}
+
+void bt_hid_disconnect(void)
+{
+	app_hid_disconnect(NULL);
+}
+
+void bt_hid_get_status(void)
+{
+    app_hid_get_status();
+}
+
+void bt_hid_send_coordinate(UINT8 button, INT16 x, INT16 y)
+{
+	app_hid_send_mouse_data(button, x, y);
+}
+
+void bt_hid_send_key_value(UINT8 key_value)
+{
+	app_hid_send_key_value(key_value);
+}
+
+void bt_hid_send_media_value(UINT8 comm_value)
+{
+	app_hid_send_media_value(comm_value);
+}
+
+#endif
+
+#ifdef CONFIG_CBP
+void bt_btc_start_calibrate_screen(void)
+{
+}
+
+void bt_btc_cancel_calibrate_screen(void)
+{
+}
+
+void bt_btc_set_screen_data(void)
+{
+
+}
+
+void bt_btc_restart_calibrate_screen(void)
+{
+}
+#endif
+
+/* External Functions For BTC */
+#ifdef CONFIG_PBAP
+void bt_pbap_get_phonebook(UINT8 store_type, UINT16 offset, UINT16 count)
+{
+	app_pbap_get_phonebook(hlp_manager_get_last_device_bd_addr(), store_type, offset, count);
+	//PBAP_FI_USER_DATA->iStorage = store_type;
+	//PBAP_FI_USER_DATA->offset = offset;
+	//PBAP_FI_USER_DATA->max_list_count = count;
+
+	//FsmEvent(g_app_pbap_fsminst, EV_APP_PBAP_UI_GET, NULL);
+}
+
+void bt_pbap_get_vcardlisting(UCHAR *number)
+{
+    app_pbap_get_vcardListing(hlp_manager_get_last_device_bd_addr(), number);
+}
+
+void bt_pbap_connect(UINT8 *address)
+{
+	app_pbap_connect(address);
+}
+
+void bt_pbap_disc_stop()
+{
+	app_pbap_stop();
+}
+
+void bt_pbap_cancel_get_phonebook(void)
+{
+	//FsmEvent(g_app_pbap_fsminst, EV_APP_PBAP_UI_DISC, NULL);
+	app_pbap_abort_phonebook();
+}
+#endif
+
+/* External Functions For BTC */
+#ifdef CONFIG_SPP
+
+int bt_spp_get_status()
+{
+	return hlp_spp_get_status();
+}
+
+void bt_spp_connect(UINT16 channel, UINT8 *addr, char *uuid)
+{
+	UINT8 bd_addr[BD_ADDR_LEN] = {0};
+	
+
+	if (addr != NULL) {
+		memcpy(bd_addr, addr, BD_ADDR_LEN);
+	} else {
+		memcpy(bd_addr, hlp_manager_get_last_device_bd_addr(), BD_ADDR_LEN);
+	}
+
+	app_spp_connect_ex(channel, addr, uuid);
+}
+
+void bt_spp_disconnect()
+{
+#ifdef CONFIG_SPP_STANDARD_SERVER
+	UINT32 handle = app_get_spp_conn_handle();
+	UINT8 *bd = app_get_spp_conn_address();
+	if (handle) {
+		app_spp_disconnect(bd, handle);
+		bse_log_api(TAG, "spp bt_spp_disconnect handle = %x\r\n", handle);
+	}
+#endif
+}
+
+
+void bt_spp_send_data(UINT8 *data, UINT32 len)
+{
+#ifdef CONFIG_SPP_STANDARD_SERVER
+	struct BuffStru *send_data = BuffNew(len, 0);
+
+	send_data->len = len;
+	send_data->off = 0;
+
+	memcpy(BUFDATA(send_data), data, len);
+
+	UINT32 out_handle = app_get_spp_conn_handle();
+	rfc_connection_info_t *rfc_info = hlp_rfc_conn_info_get_by_hdl(out_handle);
+	if (out_handle && rfc_info) {
+		bse_log_api(TAG, "spp bt_spp_send_data handle = %x, out_credit=%d, mfs=%d, len=%d\r\n",
+			out_handle, rfc_info->credit_outgoing, rfc_info->mfs, len);
+		if (rfc_info->credit_outgoing && (send_data->len <= rfc_info->mfs)) {
+			app_spp_send_data(out_handle, send_data);
+		} else {
+			bse_log_api(TAG, "spp bt_spp_send_data failed");
+		}
+	}
+	BuffFree(send_data);
+#endif
+}
+
+void bt_aap_send_data(UINT8 *data, UINT32 len)
+{
+	struct BuffStru *send_data=BuffNew(len, 0);	//send data, free
+
+	send_data->len = len;
+	send_data->off = 0;
+
+	memcpy(BUFDATA(send_data), data, len);
+
+	UINT32 out_handle = app_get_aa_conn_handle();
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(out_handle);
+	if(out_handle && rfc_info) {
+		bse_log_api(TAG,"aap bt_spp_send_data handle = %x, out_credit=%d, mfs=%d, len=%d\r\n", out_handle, rfc_info->credit_outgoing, rfc_info->mfs, len);
+		if (rfc_info->credit_outgoing && (send_data->len <= rfc_info->mfs)) {
+			app_spp_send_data(out_handle, send_data);
+		} else {
+			bse_log_api(TAG,"aap bt_spp_send_data failed");
+		}
+	}
+	BuffFree(send_data);
+}
+
+void bt_iap_send_data(UINT8 *data, UINT32 len)
+{
+	struct BuffStru *send_data=BuffNew(len, 0);	//send data, free
+
+	send_data->len = len;
+	send_data->off = 0;
+
+	memcpy(BUFDATA(send_data), data, len);
+
+	UINT32 out_handle = app_get_iap2_conn_handle();
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(out_handle);
+	if(out_handle && rfc_info) {
+		bse_log_api(TAG,"iap bt_spp_send_data handle = %x, out_credit=%d, mfs=%d, len=%d\r\n", out_handle, rfc_info->credit_outgoing, rfc_info->mfs, len);
+		if (rfc_info->credit_outgoing && (send_data->len <= rfc_info->mfs)) {
+			app_spp_send_data(out_handle, send_data);
+		} else {
+			bse_log_api(TAG,"iap2 bt_spp_send_data failed");
+		}
+	}
+	BuffFree(send_data);
+}
+#endif
+
+#ifdef CONFIG_FTP
+void bt_ftp_connect(UINT8 *bd)
+{
+	UINT8 bd_addr[BD_ADDR_LEN] = {0};
+
+	if (bd != NULL) {
+		memcpy(bd_addr, bd, BD_ADDR_LEN);
+	} else {
+		memcpy(bd_addr, hlp_manager_get_last_device_bd_addr(), BD_ADDR_LEN);
+	}
+
+	app_ftp_connect(bd_addr);
+}
+
+void bt_ftp_disconnect(void)
+{
+	app_ftp_disconnect();
+}
+
+void bt_ftp_list_remote_folder(void)
+{
+	app_ftp_list_remote_folder();
+}
+
+void bt_ftp_set_local_path(char * path)
+{
+	app_ftp_set_local_path(path);
+}
+
+void bt_ftp_browse_remote_folder(void)
+{
+	app_ftp_browse_remote_folder();
+}
+
+void bt_ftp_change_folder(char * path)
+{
+	app_ftp_change_folder(path);
+}
+
+void bt_ftp_push_object(char * path)
+{
+	app_ftp_push_object(path);
+}
+
+void bt_ftp_pull_object(char * path)
+{
+	app_ftp_pull_object(path);
+}
+
+void bt_ftp_delete_object(char *path)
+{
+	app_ftp_delete_object(path);
+}
+
+void bt_ftp_abort(void)
+{
+	app_ftp_abort();
+}
+
+#endif
+
+void bt_set_debug_level(int level)
+{
+	set_debug_level(level);
+}
+
+
+
+void bt_get_sdk_prfile()
+{
+	bt_event_indicate(BT_EV_SET_PROFILE_CONFIG, (void *)bt_manager_get_binded_profiles_value());
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+}
+
+void bt_set_sdk_prfile(UINT16 value)
+{
+	bt_manager_set_curr_profile(value);
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+}
+
+void bt_get_sdk_version()
+{
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+	bt_event_indicate(BT_EV_APP_VERSION, NULL);
+}
+
+void bt_le_start_adv(char* advData,int advLen)
+{
+	//app_le_start_adv(advData, advLen);
+}
+
+void bt_gatt_get_le_local_name()
+{
+	//app_gatt_get_le_local_name();
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+}
+
+void bt_le_stop_adv()
+{
+	//app_le_stop_adv();
+}
+
+void bt_discnnect_all_profile()
+{
+	bt_manager_discnnect_all_profile();
+	bt_event_indicate(BT_EV_EVENT_OK, NULL);
+}

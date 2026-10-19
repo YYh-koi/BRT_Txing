@@ -1,0 +1,1650 @@
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*
+* Copyright (c) 1999-2014 BARROT Corporation
+*
+* All rights reserved.
+*
+---------------------------------------------------------------------------*/
+
+/**********************************************************************
+*	File Name:		hlp_hf.c
+*
+*	Description:	Internal Functions For HandFree
+*
+*
+*	Create Date:	2014/05/29
+***********************************************************************/
+#include "btdatatype.h"
+#include <sys/types.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+#include "hfp_ui.h"
+#include "auto_hf.h"
+#include "auto_gap.h"
+#include "internal_hf.h"
+#include "btlist.h"
+#include "bt_audio_hw.h"
+#include "vendor_interface.h"
+#include "brt_trace.h"
+#include "bt_power_manager.h"
+#include "internal_manager.h"
+#include "audio_ring_buffer.h"
+#include "auto_at_internal.h"
+
+#define TAG "bse_hfp"
+
+static UINT8 s_hf_server_channel = 0;
+struct HFUserDataStru {
+	UINT8 *hfp_serverhdl;
+	UINT8 *hsp_serverhdl;
+	UINT8 *hfp_hdl;
+	UINT8 hf_num[HF_NUM_LEN];
+	UINT8 hf_local_num[HF_NUM_LEN];
+	UINT8 hf_ringcount;
+	UINT8 do_disconnect_flag;
+	UINT8 state;
+	UINT8 flag_incomming_call_num;
+	UINT8 flag_report_sco_state;
+	UINT8 sco_connection_state;
+	UINT16 sco_hdl;
+
+	struct FsmTimer *ft_dial_num;
+	struct FsmTimer *ft_check_sco;
+	struct FsmTimer *ft_hf_connect;
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	struct BtList *call_list;
+#endif
+	UINT8 disconnect_delay;//When hfp disconnecting but there have no hf hdl, set 1, Others set 0.
+
+	module_event_cbk_t event_cbk;
+};
+
+static struct FsmTimer *s_ft_hf_get_calls = NULL;
+
+static struct FsmTimer *s_ft_hf_get_calls_not_active = NULL;
+
+static struct FsmTimer *s_ft_hf_3_way_time = NULL;
+static struct FsmTimer *s_ft_hf_3_way_clear_list = NULL;
+
+/*0=disconnected, 1=connecting, 2=connected*/
+enum {
+    HF_SCO_DISCONNECTED,
+    HF_SCO_PENDING,
+    HF_SCO_CONNECTED
+};
+
+BOOL g_sco_connect = FALSE;
+static struct HFUserDataStru *s_hf_user_data = NULL;
+#define HF_USER_DATA			(s_hf_user_data)
+#define HF_STATE				(s_hf_user_data->state)
+static UINT8 *s_hf_address = NULL;
+static void hlp_hf_codec_connection_cbk(UINT8 codec);
+void hlp_hf_set_sco_handle(UINT16 handle);
+UINT16 hlp_hf_get_sco_handle(void);
+
+UINT8 iphone_flag_g = 0;
+
+// TODO
+extern vendor_interface_t *g_vendor_itf;
+
+void event_hf_indication(UINT8 event, void *param)
+{
+	switch (event) {
+	case EV_HF_DISCONNECTED:
+		g_vendor_itf->vendor_ringtone_close();
+		break;
+	case EV_HF_STANDBY:
+		g_vendor_itf->vendor_ringtone_stop();
+		break;
+	case EV_HF_ONGOING:
+		g_vendor_itf->vendor_ringtone_stop();
+		break;
+	}
+
+	if(!s_hf_user_data)
+		return ;
+	if (s_hf_user_data->event_cbk != NULL) {
+		s_hf_user_data->event_cbk((PROFILE_ID_HFP << 8) | event, param);
+	}
+}
+
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+UINT8 hlp_hf_3_way_call_get_count(void)
+{
+	UINT8 counter = 0;
+	if(!s_hf_user_data)
+		return 0;
+	hf_3_way_call_t *p_node = s_hf_user_data->call_list->head;
+
+	while (p_node != NULL) {
+		counter++;
+		p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+	}
+
+	return counter;
+}
+
+UINT8 hlp_hf_3_way_call_cailbrate_curr_active(struct HFP_CLCCInfoStru * p)
+{
+	if(!s_hf_user_data)
+		return 0;
+	hf_3_way_call_t *p_node = s_hf_user_data->call_list->head;
+	while (p_node != NULL) {
+		if(p_node->index == 1)
+		{
+			//printf("-------------p_node->state = %d\n",p_node->state);
+			if(strlen(p->number) != strlen(p_node->number) || memcmp(p_node->number, p->number,strlen(p_node->number)) != 0)
+			{
+				bse_log_verbose(TAG, "p_node->number = %s, p->number = %s strlen(p->number) = %d strlen(p_node->number) = %d\n", p_node->number, p->number, strlen(p->number), strlen(p_node->number));
+				return 1;
+			}
+		}
+		p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+	}
+	return 0;
+}
+
+UINT8 hlp_hf_3_way_call_cailbrate_curr_active_comparison(hf_3_way_call_t * p)
+{
+	if(!s_hf_user_data)
+		return 0;
+	hf_3_way_call_t *p_node = s_hf_user_data->call_list->head;
+	while (p_node != NULL) {
+
+		//printf("-------------p_node->state = %d\n",p_node->state);
+		bse_log_verbose(TAG, "p_node->number = %s p->number = %s p_node->state = %d p->state = %d", p_node->number, p->number, p_node->state, p->state);
+		if((memcmp(p_node->number, p->number,strlen(p_node->number)) == 0) && (p_node->state == 0))
+		{
+			//bse_log_verbose(TAG, "p_node->number = %s, p->number = %s strlen(p->number) = %d strlen(p_node->number) = %d\n", p_node->number, p->number, strlen(p->number), strlen(p_node->number));
+			return 1;
+		}
+
+		p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+	}
+	return 0;
+}
+
+UINT8 hlp_hf_3_way_call_get_curr_active_count(void)
+{
+	UINT8 counter = 0;
+	if(!s_hf_user_data)
+		return 0;
+	hf_3_way_call_t *p_node = s_hf_user_data->call_list->head;
+
+	while (p_node != NULL) {
+		if(p_node->state == 0)
+			counter++;
+
+		p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+	}
+
+	return counter;
+}
+
+void hlp_hf_3_way_call_clean_mark(void)
+{
+	if(!s_hf_user_data)
+		return ;
+	hf_3_way_call_t *p_node = s_hf_user_data->call_list->head;
+
+	while (p_node != NULL) {
+		bse_log_verbose(TAG, "hlp_hf_3_way_call_clean_mark, %i=d, s=%d, m=%d, %s\r\n", p_node->index, p_node->state, p_node->mark, p_node->number);
+		p_node->mark = HF_3_WAY_MARK_TYPE_NONE;
+		p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+	}
+}
+#ifdef CONFIG_HFP_RINGTONE_EVENT
+extern ring_buffer_t *sco_rx_rbuffer;
+extern ring_buffer_t *sco_tx_rbuffer;
+extern int not_need_loop_sco;
+extern uint32_t mic_alsa_number_all;
+void hfp_hf_ringtone_user_alsa()
+{
+	FILE * fd_ring = NULL;
+	fd_ring = fopen("/etc/brlink/ringtone_bt/ring.wav", "r");
+	//printf("----------------HF_STATE = %d",HF_STATE);
+	char ring_buff[130] = {0};
+
+	if(fd_ring == NULL)
+		return;
+
+	sleep(1);
+	
+	//printf("----------------fd_ring = %d HF_STATE = %d", fd_ring, HF_STATE);
+	int ring_count = 0;
+	int ring_idx = 0;
+	while(HF_STATE == ST_HF_INCOMING)
+	{
+		if(ring_count == 0)
+		{
+			fseek(fd_ring, 120, SEEK_SET);
+		} 
+		memset(ring_buff, 0, 120);
+		int ret = fread(ring_buff, 1, 120, fd_ring);
+		if(ret < 120)
+		{
+			//printf("-----------------------fseek 3 \n");
+			fseek(fd_ring, 120, SEEK_SET);
+			//printf("---HF_STATE = %d\n", HF_STATE);
+			continue;
+		}
+		
+
+		//printf("----------------sco_rx_rbuffer->push sco_rx_rbuffer = %p\n", sco_rx_rbuffer);
+		if (sco_rx_rbuffer) {
+			//printf("----------------sco_rx_rbuffer->push\n");
+            sco_rx_rbuffer->push(sco_rx_rbuffer, ring_buff, 120);
+        }
+		//printf("----------------HF_STATE = %d", HF_STATE);
+		ring_count = 1;
+		usleep(5000);
+	}
+	if(sco_rx_rbuffer != NULL) {
+		sco_rx_rbuffer->start(sco_rx_rbuffer);
+    }
+    if(sco_tx_rbuffer != NULL) {
+        sco_tx_rbuffer->start(sco_tx_rbuffer);
+    }
+    mic_alsa_number_all = 0;
+    not_need_loop_sco = 0;
+
+	bse_log_api(TAG, "%s: tx rx rbuffer restart ringtone over mic_alsa_number_all not_need_loop_sco set to 0\r\n", __func__);
+	fclose(fd_ring);
+	fd_ring = NULL;
+}
+
+static int l_ringtone_flag = 0;
+
+void hfp_hf_ringtone_change_stat(hf_3_way_call_t *p_node)
+{
+
+	bse_log_api(TAG, "p_node->state, %d p_node->index, %d l_ringtone_flag = %d\r\n", p_node->state, p_node->index, l_ringtone_flag);
+	//printf("------------------%s p_node->state = %d\n",__func__, p_node->state);
+	if((p_node->state == 4)) {//incoming
+	//printf("--------------------hlp_hf_3_way_call_get_count = %d\n", hlp_hf_3_way_call_get_count());
+		if(hlp_hf_3_way_call_get_count() < 2)
+		{
+			l_ringtone_flag = 1;
+			bt_porting_audio_open(AUDIO_TYPE_SCO, NULL);
+			usleep(200000);
+			pthread_t ringtone_thread_id;
+			pthread_create(&ringtone_thread_id, NULL, hfp_hf_ringtone_user_alsa, NULL);//[0809]
+			pthread_detach(ringtone_thread_id);
+
+			//event_hf_indication(EV_HF_RINGTONE_ON, p_node);
+		}
+	} else {
+#if 1
+		printf("l_ringtone_flag = %d HF_USER_DATA->sco_connection_state != HF_SCO_CONNECTED = %d HF_STATE = %d\n", l_ringtone_flag, HF_USER_DATA->sco_connection_state != HF_SCO_CONNECTED, HF_STATE);
+		if(l_ringtone_flag && HF_USER_DATA->sco_connection_state != HF_SCO_CONNECTED && HF_STATE == ST_HF_INCOMING)
+		{
+			bt_porting_audio_close(AUDIO_TYPE_SCO);
+			//event_hf_indication(EV_HF_RINGTONE_OFF, p_node);
+			l_ringtone_flag = 0;
+		}
+#else
+		if(l_ringtone_flag)
+		{
+			event_hf_indication(EV_HF_RINGTONE_OFF, p_node);
+			l_ringtone_flag = 0;
+		}
+#endif
+	}
+
+}
+#endif
+
+void hlp_hf_3_way_call_check_mark(void)
+{
+	bse_log_verbose(TAG, "hlp_hf_3_way_call_check_mark\n");
+	if(!s_hf_user_data)
+		return ;
+	hf_3_way_call_t *p_node = s_hf_user_data->call_list->head;
+	hf_3_way_call_t *p_wait_remove = NULL;
+	bse_log_verbose(TAG, "hlp_hf_3_way_call_check_mark 2\n");
+	while (p_node != NULL) {
+		bse_log_verbose(TAG, "hlp_hf_3_way_call_check_mark, %i=d, s=%d, m=%d, %s\r\n", p_node->index, p_node->state, p_node->mark, p_node->number);
+		if (p_node->mark == HF_3_WAY_MARK_TYPE_NONE) {
+			p_wait_remove = p_node;
+			p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+			NewListRemoveAt(s_hf_user_data->call_list, p_wait_remove);
+			bse_log_verbose(TAG, "hlp_hf_3_way_call_check_mark, %d, %s\r\n", p_wait_remove->index, p_wait_remove->number);
+			if (strncmp(p_wait_remove->number, s_hf_user_data->hf_num, strlen(s_hf_user_data->hf_num)) == 0) {
+				memset(s_hf_user_data->hf_num, 0, sizeof(s_hf_user_data->hf_num));
+			}
+			event_hf_indication(EV_HF_3_WAY_CALL_DONE, p_wait_remove);
+			p_wait_remove->state = 6;
+
+#ifdef CONFIG_HFP_RINGTONE_EVENT
+			hfp_hf_ringtone_change_stat(p_wait_remove);
+#endif
+
+			if(!hlp_hf_3_way_call_get_count())
+			{
+				hlp_hf_set_status(ST_HF_CONNECTED);
+				event_hf_indication(EV_HF_STAT, (void *)3);
+			}
+				
+			BtListMemberFree(p_wait_remove);
+		} else {
+			p_node = (hf_3_way_call_t *)NEXT_MEM(s_hf_user_data->call_list, p_node);
+		}
+	}
+}
+
+static hf_3_way_call_t event_p_node;
+void hlp_hf_3_way_event_active_stat()
+{
+	//hf_3_way_call_t event_node;
+	//memcpy(&event_node, p_node, sizeif(hf_3_way_call_t));
+    bse_log_print("at_event", "\r\n", "hlp_hf_3_way_call_get_curr_active_count() = %d\n", hlp_hf_3_way_call_get_curr_active_count());
+	if(hlp_hf_3_way_call_get_curr_active_count() > 1)
+	{
+		//event_hf_indication(EV_HF_3_WAY_CALL_STATE_IND, p_node);
+        FsmAddTimer(NULL, 50, 0, NULL, NULL, (UINT32)hlp_hf_3_way_event_active_stat);
+	}else{
+        //bse_log_print("at_event", "\r\n", "[AT]   %s", &event_buffer[2]);
+        //bse_log_print("at_event", "\r\n", "event_buffer = %s\n", hf_3_way_buff);
+		bse_log_api(TAG, "333 event_p_node.number = %s event_p_node.state = %d",event_p_node.number, event_p_node.state);
+		if(hlp_hf_3_way_call_cailbrate_curr_active_comparison(&event_p_node))
+        	event_hf_indication(EV_HF_3_WAY_CALL_STATE_IND, &event_p_node);
+	}
+}
+
+void hlp_hf_3_way_call_change_state(UINT8 idx, UINT8 state, UINT8 *number)
+{
+	if(!s_hf_user_data)
+		return ;
+	hf_3_way_call_t *p_node = NewListFind(s_hf_user_data->call_list, &idx, 1);
+	UINT8 number_len = 0;
+
+	bse_log_api(TAG, "hlp_hf_3_way_call_change_state, %d, %d, %s\r\n", idx, state, number);
+
+	//printf("---------hlp_hf_3_way_call_change_state, %d, %d, %s\r\n", idx, state, number);
+	//if (state == 0 && s_hf_user_data->sco_connection_state == HF_SCO_DISCONNECTED && hlp_hf_get_status() > ST_HF_CONNECTED ) {
+		//bse_log_api(TAG, "hlp_hf_3_way_call_change_state ophone simi");
+		//bt_event_indicate(BT_EV_HF_SCO_DISCONNECTED, NULL);
+	//}
+
+	if (p_node != NULL) {
+		bse_log_api(TAG, "p_node->state, %d\r\n", p_node->state);
+		p_node->mark = HF_3_WAY_MARK_TYPE_MARK;
+		if (p_node->state != state) {
+			p_node->state = state;
+			//event_hf_indication(EV_HF_3_WAY_CALL_STATE_IND, p_node);
+			if(p_node->state == 0)
+			{
+				memset(&event_p_node, 0, sizeof(hf_3_way_call_t));
+				memcpy(&event_p_node, p_node, sizeof(hf_3_way_call_t));
+				bse_log_api(TAG, "event_p_node.number = %s event_p_node.state = %d",event_p_node.number, event_p_node.state);
+				hlp_hf_3_way_event_active_stat();
+				return ;
+			}
+			event_hf_indication(EV_HF_3_WAY_CALL_STATE_IND, p_node);
+
+#ifdef CONFIG_HFP_RINGTONE_EVENT
+			if(p_node->index == 1 && p_node->state == 4)
+				hfp_hf_ringtone_change_stat(p_node);
+#endif
+		}
+	} else {
+		p_node = (hf_3_way_call_t *)BtListMemberNew(sizeof(hf_3_way_call_t));
+
+		p_node->index = idx;
+		number_len = strlen(number) < HF_NUM_LEN ? strlen(number) : ( HF_NUM_LEN - 1);
+		memcpy(p_node->number, number, number_len);
+		p_node->state = state;
+		p_node->mark = HF_3_WAY_MARK_TYPE_NEW;
+		NewListAddTail(s_hf_user_data->call_list, p_node);
+		event_hf_indication(EV_HF_3_WAY_CALL_NEW, p_node);
+
+		bse_log_info(TAG, "hlp_hf_get_status(): %d, p_node->index: %d", hlp_hf_get_status(), p_node->index);
+		if ((hlp_hf_get_status() == ST_HF_CONNECTED)&& (p_node->index == 1)) { // 
+			if ((p_node->state == 2) || (p_node->state == 3)) {
+				hlp_hf_set_status(ST_HF_OUTGOING);
+			} else if (p_node->state == 0) {
+				hlp_hf_set_status(ST_HF_ONGOING);
+			} else if (p_node->state == 4) {
+				hlp_hf_set_status(ST_HF_INCOMING);
+			}
+		}
+#ifdef CONFIG_HFP_RINGTONE_EVENT
+		if(p_node->index == 1 && p_node->state == 4)
+			hfp_hf_ringtone_change_stat(p_node);
+#endif
+	}
+}
+
+void hlp_hf_3_way_clean_call_list(void)
+{
+	bse_log_api(TAG, "\r\n hlp_hf_3_way_clean_call_list");
+	if(!s_hf_user_data)
+		return ;
+	NewListRemoveAll(s_hf_user_data->call_list);
+}
+
+void hlp_hf_3_way_control(UINT8 idx, UINT8 ctl)
+{
+//	if (hlp_hf_3_way_call_get_count() > 1) {
+	HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, ctl, idx);
+//	}
+}
+#endif
+
+/* Internal functions for process event of timer timeout */
+void hlp_hf_timer_no_num(void *arg)
+{
+	if(!s_hf_user_data) {
+		return ;
+	}
+	if (s_hf_user_data->hf_num[0] == '\0') {
+		bse_log_api(TAG, "\r\n getNum state %d", hlp_hf_get_status());
+
+		if (hlp_hf_get_status() == ST_HF_OUTGOING) {
+			event_hf_indication(EV_HF_OUTGOING, NULL);
+		} else if (hlp_hf_get_status() == ST_HF_INCOMING) {
+			event_hf_indication(EV_HF_INCOMMINGCALL, NULL);
+		} else if (hlp_hf_get_status() == ST_HF_ONGOING) {
+			event_hf_indication(EV_HF_ONGOING, NULL);
+		}
+	}
+	s_hf_user_data->ft_dial_num = NULL;
+}
+
+void hlp_hf_timer_connect_ind(void *arg)
+{
+	if(!s_hf_user_data)
+		return ;
+	HF_USER_DATA->do_disconnect_flag = 1;
+
+	s_hf_user_data->ft_hf_connect = NULL;
+}
+
+void hlp_hf_timer_check_sco(void *arg)
+{
+	if(!s_hf_user_data)
+		return ;
+	if (s_hf_user_data->sco_connection_state == HF_SCO_DISCONNECTED && hlp_hf_get_status() > ST_HF_CONNECTED) {
+		HFP_HF_AudioConnTrans(hlp_hf_get_handle());
+	}
+}
+
+/* Internal functions for process event of hfp and application */
+void hlp_hf_init(module_event_cbk_t p_event_cbk)
+{
+	if (s_hf_user_data == NULL) {
+		s_hf_user_data = (struct HFUserDataStru *)NEW(sizeof(struct HFUserDataStru));
+	}
+
+    if (s_hf_address == NULL) {
+        s_hf_address = (unsigned char *)NEW(BD_ADDR_LEN);
+    }
+	memset(s_hf_user_data, 0, sizeof(struct HFUserDataStru));
+	memset(s_hf_address, 0, BD_ADDR_LEN);
+	s_hf_user_data->event_cbk = p_event_cbk;
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	s_hf_user_data->call_list = BtNewListNew(sizeof(hf_3_way_call_t));
+#endif
+	memset(s_hf_user_data->hf_local_num, 0, HF_NUM_LEN);
+	hlp_hf_set_status(ST_HF_INIT);
+}
+
+void hlp_get_config_hfp()
+{
+	event_hf_indication(EV_HF_EXIT_CFG, (void *)0);
+	event_hf_indication(EV_HF_OK, NULL);
+}
+
+void hlp_hf_connect(UINT8* bd_addr)
+{
+	if (app_gap_is_discovering() == TRUE) {
+			app_gap_cancel_discovery();
+	}
+
+	if(hlp_hf_get_status() > ST_HF_READY)
+	{
+		return ;
+	}
+
+	s_hf_user_data->disconnect_delay = 0;
+	hlp_hf_set_status(ST_HF_CONNECTING);
+	event_hf_indication(EV_HF_OK, NULL);
+	//event_hf_indication(EV_HF_CONNECTING, bd_addr);
+
+	if(bd_addr) {
+		HFP_Client_Start(hlp_hf_get_hfp_server_handle(), bd_addr, NULL, HFP_ROLE_HF_CLIENT, hlp_hf_event_cbk);
+	} else {
+		HFP_Client_Start(hlp_hf_get_hsp_server_handle(), bd_addr, NULL, HFP_ROLE_HF_CLIENT, hlp_hf_event_cbk);
+	}
+
+}
+
+void hlp_hf_disconnect(void *hdl)
+{
+	bse_log_api(TAG, "hlp_hf_disconnect, hdl=%08x\r\n", hdl);
+	if(!s_hf_user_data)
+		return ;
+	s_hf_user_data->disconnect_delay = 0;
+
+	if (hdl != NULL) {
+		HFP_Client_Stop(hdl);
+	} else {
+		s_hf_user_data->disconnect_delay = 1;
+	}
+
+}
+#if 0
+static void hlp_hfp_set_security(UINT16 channel)
+{
+	struct HCI_SecurityInfoStru *hfp_reg = NULL;
+
+	s_hf_server_channel = channel;
+	bse_log_info(TAG, "hlp_hfp_set_security chnl %d", s_hf_server_channel);
+	hfp_reg = List_NodeNew(sizeof(struct HCI_SecurityInfoStru));
+	hfp_reg->proto_id = PROT_RFCOMM;
+	hfp_reg->channel = channel;
+	hfp_reg->mask = HCI_SECURITY_AUTHORIZE|HCI_SECURITY_AUTHENTICATE|HCI_SECURITY_ENCRYPT|HCI_SECURITY_INCOMING;
+	HCI_Security_RequireReg(hfp_reg);
+}
+#endif
+UINT8 hlp_hfp_get_channel()
+{
+	bse_log_info(TAG, "hlp_hfp_get_channel %d", s_hf_server_channel);
+	return s_hf_server_channel;
+}
+
+void hlp_hf_server_start(void)
+{
+	UINT32 svc_hdl;
+	UINT32 features = HFP_BRSF_HF_ALL & 0x0000007F;
+	svc_hdl = 0x00010000;
+#ifdef CONFIG_HFP_MSBC_ENABLED
+	features |= HFP_BRSF_HF_CODEC_NEGOTIATION;
+#endif
+	HFP_Server_Start(features, 1, &svc_hdl, HFP_ROLE_HF_SERVER, 1, hlp_hf_event_cbk);
+	hlp_hf_set_status(ST_HF_READY);
+}
+
+void hlp_hf_server_stop(void)
+{
+	if(!s_hf_user_data)
+		return ;
+	if (s_hf_user_data->hfp_serverhdl != NULL) {
+		HFP_Server_Stop(s_hf_user_data->hfp_serverhdl);
+		s_hf_user_data->hfp_serverhdl = NULL;
+	}
+	if (s_hf_user_data->hsp_serverhdl != NULL) {
+		HFP_Server_Stop(s_hf_user_data->hsp_serverhdl);
+		s_hf_user_data->hsp_serverhdl = NULL;
+	}
+	s_hf_server_channel = 0;
+	hlp_hf_set_status(ST_HF_INIT);
+}
+
+void hlp_hf_audio_transfer(void)
+{
+	if(!s_hf_user_data)
+		return ;
+	if(s_hf_user_data->sco_connection_state != HF_SCO_PENDING) { //TODO will start a timer to resolve controller not report SCO connection complete event.
+		s_hf_user_data->sco_connection_state = HF_SCO_PENDING;
+		HFP_HF_AudioConnTrans(hlp_hf_get_handle());
+	}
+}
+
+void hlp_hf_done(void)
+{
+	if(!s_hf_user_data)
+		return ;
+	FSM_DelTimer(&s_hf_user_data->ft_dial_num);
+	FSM_DelTimer(&s_hf_user_data->ft_check_sco);
+	FSM_DelTimer(&s_hf_user_data->ft_hf_connect);
+
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	if (s_hf_user_data->call_list != NULL) {
+		NewListRemoveAll(s_hf_user_data->call_list);
+		BtNewListFree(s_hf_user_data->call_list);
+	}
+	if(s_ft_hf_3_way_clear_list)
+	{
+		FSM_DelTimer(&s_ft_hf_3_way_clear_list);
+		s_ft_hf_3_way_clear_list = NULL;
+	}
+	if(s_ft_hf_3_way_time)
+	{
+		FSM_DelTimer(&s_ft_hf_3_way_time);
+		s_ft_hf_3_way_time = NULL;
+	}
+#endif
+    if (s_hf_address != NULL) {
+        FREE(s_hf_address);
+        s_hf_address = NULL;
+    }
+	if (s_hf_user_data != NULL) {
+		FREE(s_hf_user_data);
+		s_hf_user_data = NULL;
+	}
+}
+
+void hlp_hf_auto_connect(void *arg)
+{
+	//HFAutoConn(arg);
+}
+
+void hlp_hf_get_sub_num(void)
+{
+	HFP_HF_GetSubscriberNumber(HF_USER_DATA->hfp_hdl);
+}
+
+void hlp_hf_get_current_calls(void)
+{
+	bse_log_info(TAG, "start hlp_hf_get_current_calls");
+	if(s_ft_hf_get_calls) {
+		FSM_DelTimer(&s_ft_hf_get_calls);
+		s_ft_hf_get_calls = 0;
+	}
+
+	if(s_ft_hf_get_calls_not_active) {
+		FSM_DelTimer(&s_ft_hf_get_calls_not_active);
+		s_ft_hf_get_calls_not_active = NULL;
+	}
+
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	hlp_hf_3_way_call_clean_mark();
+#endif
+	if(HF_USER_DATA)
+		HFP_HF_GetCurrentCalls(HF_USER_DATA->hfp_hdl);
+}
+
+static void hlp_hf_get_currnet_calls_timer(void *arg)
+{
+	s_ft_hf_get_calls = NULL;
+	hlp_hf_get_current_calls();
+}
+
+void hlp_hf_extend_cmd(void *cmd, UINT16 len, UINT32 timeout)
+{
+	HFP_ExtendCmd(HF_USER_DATA->hfp_hdl, cmd, len, timeout);
+}
+
+void hlp_hf_btrh_operation(CHAR *chr)
+{
+	if (*chr == '0') {
+		HFP_HF_HoldIncomingCall(HF_USER_DATA->hfp_hdl);
+	} else if (*chr == '1') {
+		HFP_HF_AcceptHeldIncomingCall(HF_USER_DATA->hfp_hdl);
+	} else if (*chr == '2') {
+		HFP_HF_RejectHeldIncomingCall(HF_USER_DATA->hfp_hdl);
+	}
+}
+
+int hlp_hf_exist_3rd_call()
+{
+	UINT8 call_count = 1;
+
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	
+	call_count = hlp_hf_3_way_call_get_count();
+#endif
+	if (call_count > 1) {
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+void hlp_hf_cancel_active_call()
+{
+	HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, 0, 0);
+}
+
+void hlp_hf_3way_calling_handler(CHAR *chr)
+{
+	if (*chr == '0') {
+		HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, 0, 0);
+	} else if (*chr == '1') {
+		HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, 1, 0);
+	} else if (*chr == '2') {
+		HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, 2, 0);
+	} else if (*chr == '3') {
+		HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, 3, 0);
+	}
+}
+
+void hlp_hf_set_status(UINT8 status)
+{
+	bse_log_api(TAG, "hlp_hf_set_status, you set %d", status);
+	if (s_hf_user_data != NULL) {
+		HF_STATE = status;
+
+		int even_stat = status;
+		if(status > ST_HF_INIT)
+			even_stat = status - 1;
+		//bse_log_api(TAG, "even_stat = %d\n", even_stat);
+		if(get_g_bt_opened_status() && even_stat < ST_HF_OUTGOING)
+		{
+			//if(status == ST_HF_READY && hlp_hf_get_status() >= ST_HF_CONNECTING)//ST_HF_CONNECTED
+			if(status >= ST_HF_READY)//ST_HF_CONNECTED
+			{
+				bse_log_api(TAG, "not event hfp stat %d", status);
+				return ;
+			}
+			event_hf_indication(EV_HF_STAT, (void *)even_stat);
+		}	
+	}
+}
+
+UINT8 hlp_hf_get_status(void)
+{
+	if (s_hf_user_data == NULL) {
+		return ST_HF_UNINIT;
+	} else {
+		if(HF_STATE < ST_HF_ONGOING)
+			bse_log_info(TAG,"hlp_hf_get_status, you get %d", HF_STATE);
+		return HF_STATE;
+	}
+}
+
+void hlp_hf_query_status(void)
+{
+  	hf_status_t status;
+	memset(&status, 0, sizeof(hf_status_t));
+
+	int hfp_statu = HF_STATE;
+	//status.status = HF_STATE;
+	if(hfp_statu > ST_HF_INIT)
+		hfp_statu = HF_STATE - 1;
+	printf("hfp_status = %d\n", hfp_statu);
+	memcpy(status.bd, s_hf_address, BD_ADDR_LEN);
+	event_hf_indication(EV_HF_STAT, (void *) hfp_statu); 
+}
+
+void hfp_hf_time_set_status()
+{
+	if(hlp_hf_get_status() < ST_HF_CONNECTED)
+		hlp_hf_set_status(ST_HF_CONNECTED);
+}
+
+void hlp_hf_connect_complete(UINT8 *bd, UINT8 role)
+{
+	struct connected_info_t *connected_info = NEW(sizeof(struct connected_info_t));
+	bse_log_api(TAG, "\r\nHFP_EV_CONNECT_IND\r\n");
+
+	hlp_hf_set_status(ST_HF_CONNECTED);
+	//FsmAddTimer(NULL, 200, 0, NULL, NULL, hfp_hf_time_set_status);//200ms
+
+	memcpy(connected_info->bd, bd, BD_ADDR_LEN);
+	memcpy(s_hf_address, connected_info->bd, BD_ADDR_LEN);
+	connected_info->outgoing = (role != HFP_ROLE_HF_SERVER);
+
+	event_hf_indication(EV_HF_CONNECTED, connected_info);
+	FREE(connected_info);
+}
+
+/* There Functions is Used to Process Event of HFP */
+void hlp_hf_ring_ind(void *arg)
+{
+	struct app_hf_ring_param_stru ring_param;
+	
+	ring_param.ring_tone_type = *((UINT8 *)arg);
+	if (ring_param.ring_tone_type == HF_RING_TONE_TYPE_OUT_BAND) {
+		g_vendor_itf->vendor_ringtone_start(HF_USER_DATA->hf_ringcount);
+	}
+	ring_param.ring_count = HF_USER_DATA->hf_ringcount;
+	bse_log_api(TAG, "\r\n ring_tone_type %d ", ring_param.ring_tone_type);
+	//event_hf_indication(EV_HF_RINGTONE, &ring_param);
+	HF_USER_DATA->hf_ringcount++;
+}
+
+void hlp_hf_terminate_local_ringtone_ind(void)
+{
+	g_vendor_itf->vendor_ringtone_stop();
+	HF_USER_DATA->hf_ringcount = 0x00;
+	event_hf_indication(EV_HF_RINGTONE_TERMINATED, NULL);
+}
+
+void hlp_hf_3_way_time_stat()
+{
+	bse_log_api(TAG, "hlp_hf_3_way_time_stat!\r\n");
+	//hlp_hf_get_current_calls();
+	bse_log_api(TAG, "hlp_hf_3_way_call_get_count() = %d\r\n", hlp_hf_3_way_call_get_count());
+	if(hlp_hf_3_way_call_get_count() < 1)
+		{
+			hlp_hf_set_status(ST_HF_CONNECTED);
+			bse_log_api(TAG, "clean_call ---------------------------------------------\n");
+			hlp_hf_get_current_calls();
+			hlp_hf_3_way_call_check_mark();
+			s_ft_hf_3_way_clear_list = FsmAddTimer(NULL, 100, 0, NULL, NULL, (UINT32)hlp_hf_3_way_clean_call_list);//20
+		}
+}
+
+void hlp_hf_standby(void *arg)
+{
+	bse_log_api(TAG, "-->Call Terminated!\r\n");
+
+	if(!s_hf_user_data)
+		return ;
+	if(hlp_hf_get_status() > ST_HF_CONNECTED) {
+		//hlp_hf_set_status(ST_HF_CONNECTED);
+		event_hf_indication(EV_HF_STANDBY, NULL);
+		memset(s_hf_user_data->hf_num, 0, sizeof(s_hf_user_data->hf_num));
+		HF_USER_DATA->hf_ringcount = 0x00;
+
+		if(s_hf_user_data->ft_dial_num != NULL) {
+			FSM_DelTimer(&s_hf_user_data->ft_dial_num);
+			s_hf_user_data->ft_dial_num = NULL;
+		}
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+		//hlp_hf_3_way_clean_call_list();
+		//s_ft_hf_3_way_time = FsmAddTimer(NULL, 200, 0, NULL, NULL, (UINT32)hlp_hf_3_way_time_stat);
+		hlp_hf_3_way_time_stat();
+#endif
+	}
+}
+
+void hlp_hf_dial_ind_ex(UCHAR event, void* arg)
+{
+	if (hlp_hf_exist_3rd_call()) {
+		//hlp_hf_get_current_calls();
+		return;
+	}
+
+	if(!s_hf_user_data)
+		return ;
+	if(s_hf_user_data->hf_num[0] == '\0') {
+		bse_log_info(TAG, "%s->%d: hlp_hf_get_currnet_calls_timer delay 500 was called", __func__, __LINE__);
+		//FIXME 500ms ?
+		if(!s_ft_hf_get_calls)
+			s_ft_hf_get_calls = FsmAddTimer(NULL, 500, 0, NULL, NULL, (UINT32)hlp_hf_get_currnet_calls_timer);
+		return ;
+	}
+	bse_log_api(TAG, "hlp_hf_dial_ind_ex event is %d", event);
+	switch(event) {
+	case HFP_EV_INCOMINGCALL_IND:
+		hlp_hf_set_status(ST_HF_INCOMING);
+		if(strlen(s_hf_user_data->hf_num) <= 0)
+		{
+			memcpy(s_hf_user_data->hf_num, "000000000", 8);
+		}
+		bse_log_info(TAG, "%s->%s", __func__, (s_hf_user_data->hf_num));
+		event_hf_indication(EV_HF_INCOMMINGCALL, s_hf_user_data->hf_num);
+		break;
+	case HFP_EV_OUTGOINGCALL_IND:
+		hlp_hf_set_status(ST_HF_OUTGOING);
+		if(strlen(s_hf_user_data->hf_num) <= 0)
+		{
+			memcpy(s_hf_user_data->hf_num, "000000000", 8);
+		}
+		bse_log_info(TAG, "%s->%s", __func__, (s_hf_user_data->hf_num));
+		event_hf_indication(EV_HF_OUTGOING, s_hf_user_data->hf_num);
+		break;
+	case HFP_EV_ONGOINGCALL_IND:
+		hlp_hf_set_status(ST_HF_ONGOING);
+		if(strlen(s_hf_user_data->hf_num) <= 0)
+		{
+			memcpy(s_hf_user_data->hf_num, "000000000", 8);
+		}
+		bse_log_info(TAG, "%s->%s", __func__, (s_hf_user_data->hf_num));
+		event_hf_indication(EV_HF_ONGOING, s_hf_user_data->hf_num);
+		break;
+	default:
+		break;
+	}
+}
+
+void hlp_hf_dial_ind(UCHAR event, void *arg)
+{
+	if(!s_hf_user_data)
+		return ;
+	s_hf_user_data->ft_dial_num= FsmAddTimer(NULL, 5000, 0, NULL, NULL, (UINT32)hlp_hf_timer_no_num);
+
+	memset(s_hf_user_data->hf_num, 0, sizeof(s_hf_user_data->hf_num));
+	hlp_hf_get_current_calls();
+}
+
+void hlp_hf_dial_num_ind(UCHAR event, void *arg)
+{
+	UINT8 num_len = 0;
+	UINT8 len = 0;
+	bse_log_api(TAG, "\r\nHFDialNumInd state %d event %d ", hlp_hf_get_status(), event);
+	if(!s_hf_user_data)
+		return ;
+
+	if(hlp_hf_get_status() == ST_HF_CONNECTED) {
+		hlp_hf_set_status(ST_HF_INCOMING);
+	} else if(HF_STATE > ST_HF_INCOMING && event == HFP_EV_CALL_WAITING_IND) {
+		//TODO
+
+	}
+	if ((hlp_hf_get_status() == ST_HF_INCOMING) ) { //&& (s_hf_user_data->ft_dial_num != NULL) ) {
+		if (strlen(s_hf_user_data->hf_num) == 0) {
+			len = strlen((char *)arg);
+			num_len = len >= HF_NUM_LEN ? (HF_NUM_LEN - 1): len;//add by hua
+			memset(s_hf_user_data->hf_num, 0, HF_NUM_LEN);
+			memcpy(s_hf_user_data->hf_num, arg, num_len);
+#ifdef CONFIG_PBAP
+		bse_log_api(TAG, " to get vcardlisting!");
+            app_pbap_get_vcardListing(s_hf_address, s_hf_user_data->hf_num);
+#endif
+			/*if(s_ft_hf_get_calls) {
+				bse_log_info(TAG, "%s: will kill timer &s_ft_hf_get_calls", __func__);
+				FSM_DelTimer(&s_ft_hf_get_calls);
+				s_ft_hf_get_calls = 0;
+			}*/
+			event_hf_indication(EV_HF_INCOMMINGCALL, arg);
+		}
+	}
+
+	bse_log_info(TAG, "\r\nHFDialNumInd state %d event %d Exit", hlp_hf_get_status(), event);
+}
+
+void hlp_hf_current_calls_ind(void *arg)
+{
+	UINT8 ag_state = 0x00;
+
+	/*add by hua*/
+	UINT8 num_len = 0;
+	UINT8 len = 0;
+	struct HFP_CLCCInfoStru *param_in = (struct HFP_CLCCInfoStru *)arg;
+
+	len = strlen(param_in->number);
+	num_len = len < HF_NUM_LEN ? len : HF_NUM_LEN - 1;
+	memset(HF_USER_DATA->hf_num, 0, HF_NUM_LEN);
+	memcpy(HF_USER_DATA->hf_num, param_in->number, num_len);
+	if(s_ft_hf_get_calls) {
+		bse_log_info(TAG, "%s: will kill timer &s_ft_hf_get_calls", __func__);
+		FSM_DelTimer(&s_ft_hf_get_calls);
+		s_ft_hf_get_calls = 0;
+	}
+	bse_log_api(TAG, "\r\nhlp_hf_current_calls_ind <idx:%d>:<Num:%s><Len:%d><Type:%d><dir:%d><status:%d><mode:%d><mpty:%d>\r\n"
+	            ,param_in->idx, HF_USER_DATA->hf_num, param_in->num_len, param_in->type, param_in->dir, param_in->status, param_in->mode, param_in->mpty);
+
+#ifdef CONFIG_PBAP
+		bse_log_api(TAG, "clcc to get vcardlisting! param_in->num_len:%d", param_in->num_len);
+		if(param_in->num_len > 0) {
+            		app_pbap_get_vcardListing(s_hf_address, s_hf_user_data->hf_num);
+		}
+#endif
+
+	if(param_in->idx == 1)
+	{
+		if(hlp_hf_3_way_call_cailbrate_curr_active(param_in))
+		{
+			//printf("event frist call-------------\n");
+			hlp_hf_get_current_calls();
+			hlp_hf_3_way_call_check_mark();
+		}
+	}
+	
+
+#if 0
+	if ((hlp_hf_get_status() == ST_HF_CONNECTED) && (param_in->dir == 0x01) && ((param_in->status == 0x04) ||(param_in->status == 0x05))) {
+		hlp_hf_set_status(ST_HF_INCOMING);
+		event_hf_indication(EV_HF_INCOMMINGCALL, param_in->number);
+	} else if ((hlp_hf_get_status() == ST_HF_CONNECTED) && (param_in->dir == 0x00) && ((param_in->status == 0x02) ||(param_in->status == 0x03))) {
+		hlp_hf_set_status(ST_HF_OUTGOING);
+		event_hf_indication(EV_HF_OUTGOING, param_in->number);
+	} else if ((hlp_hf_get_status() == ST_HF_CONNECTED) && (param_in->status == 0)) {
+		hlp_hf_set_status(ST_HF_ONGOING);
+		event_hf_indication(EV_HF_ONGOING, param_in->number);
+	} else if( (hlp_hf_get_status() == ST_HF_INCOMING) && (s_hf_user_data->ft_dial_num != NULL) ) {
+		event_hf_indication(EV_HF_INCOMMINGCALL, param_in->number);
+	} else if ( (hlp_hf_get_status() == ST_HF_OUTGOING )&& (s_hf_user_data->ft_dial_num != NULL) ) {
+		event_hf_indication(EV_HF_OUTGOING, param_in->number);
+	} else if( (hlp_hf_get_status() == ST_HF_ONGOING) && (s_hf_user_data->ft_dial_num != NULL) ) {
+		event_hf_indication(EV_HF_ONGOING, param_in->number);
+	}
+#else
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	hlp_hf_3_way_call_change_state(param_in->idx, param_in->status, param_in->number);
+#endif
+	bse_log_api(TAG, "hlp_hf_get_status(): %d, p_node->index: %d", hlp_hf_get_status(), param_in->idx);
+	if (param_in->idx > 1) {
+		goto END;
+	}
+
+	if ((param_in->dir == 0x01) && ((param_in->status == 0x04) || (param_in->status == 0x05))) {
+		ag_state = ST_HF_INCOMING;
+	} else if ((param_in->dir == 0x00) && ((param_in->status == 0x02) || (param_in->status == 0x03))) {
+		ag_state = ST_HF_OUTGOING;
+	} else if (param_in->status == 0x00) {
+		ag_state = ST_HF_ONGOING;
+	} else if (param_in->status == 0x01) {
+		ag_state = ST_HF_HELD;
+	} else {
+		ag_state = hlp_hf_get_status();
+	}
+
+	if (hlp_hf_get_status() != ag_state && hlp_hf_get_status() != ST_HF_HUNGUPING) {
+		memset(s_hf_user_data->hf_num, 0, sizeof(s_hf_user_data->hf_num));
+		hlp_hf_set_status(ag_state);
+	}
+
+	if (strlen(s_hf_user_data->hf_num) == 0) {
+		len = strlen(param_in->number);
+		num_len = len < HF_NUM_LEN ? len : HF_NUM_LEN - 1;
+		memcpy(s_hf_user_data->hf_num, param_in->number, num_len);
+
+		if(hlp_hf_get_status() == ST_HF_INCOMING) {
+			event_hf_indication(EV_HF_INCOMMINGCALL, param_in->number);
+		} else if (hlp_hf_get_status() == ST_HF_OUTGOING) {
+			event_hf_indication(EV_HF_OUTGOING, param_in->number);
+		} else if(hlp_hf_get_status() == ST_HF_ONGOING) {
+			event_hf_indication(EV_HF_ONGOING, param_in->number);
+		}
+	}
+
+#endif
+END:
+	if(s_hf_user_data->ft_dial_num != NULL) {
+		FSM_DelTimer(&s_hf_user_data->ft_dial_num);
+		s_hf_user_data->ft_dial_num = NULL;
+	}
+}
+
+void hlp_hf_audio_established(UINT16 handle, unsigned char is_wbs)
+{
+	g_vendor_itf->vendor_on_sco_established(handle);
+	bse_log_api(TAG, "\r\n-->SCO Audio Connection Established.\r\n");
+
+	if(!s_hf_user_data)
+		return ;
+	s_hf_user_data->sco_connection_state = HF_SCO_CONNECTED;
+        g_sco_connect = TRUE;
+	if (s_hf_user_data->ft_check_sco!= NULL) {
+		FSM_DelTimer(&s_hf_user_data->ft_check_sco);
+		s_hf_user_data->ft_check_sco = NULL;
+	}
+
+	if (hlp_hf_get_status() == ST_HF_HUNGUPING) {
+		HFP_HF_CancelCall(hlp_hf_get_handle());
+	}
+
+	hlp_hf_set_sco_handle(handle);
+	audio_sco_param_t sco_param;
+	sco_param.handle = handle;
+	sco_param.is_wbs = is_wbs;
+	event_hf_indication(EV_HF_SCO_CONNECTED, &sco_param);
+#ifdef PATCH_SEND_CLCC
+	bse_log_info(TAG, "%s->%d: hlp_hf_get_currnet_calls_timer delay 500 was called", __func__, __LINE__);
+	if(!s_ft_hf_get_calls)
+		s_ft_hf_get_calls = FsmAddTimer(NULL, 500, 0, NULL, NULL, (UINT32)hlp_hf_get_currnet_calls_timer);
+#endif
+}
+
+
+void hlp_hf_audio_release(void)
+{
+	g_vendor_itf->vendor_on_sco_released();
+	bse_log_api(TAG, "\r\n-->SCO Audio Connection Released.\r\n");
+        g_sco_connect = FALSE;
+	if(!s_hf_user_data)
+		return ;
+	hlp_hf_set_sco_handle(0);
+	event_hf_indication(EV_HF_SCO_DISCONNECTED, NULL);
+	s_hf_user_data->sco_connection_state = HF_SCO_DISCONNECTED;
+	bse_log_info(TAG, "%s->%d: hlp_hf_get_currnet_calls_timer delay 500 was called", __func__, __LINE__);
+	if(!s_ft_hf_get_calls)
+		s_ft_hf_get_calls = FsmAddTimer(NULL, 500, 0, NULL, NULL, (UINT32)hlp_hf_get_currnet_calls_timer);
+}
+
+void hlp_hf_slc_established(UINT8 *bd, UINT8 role)
+{
+	bse_log_api(TAG, "HFP_EV_SLC_ESTABLISHED_IND... \r\n");
+
+	if(!s_hf_user_data->hf_local_num[0])
+	{
+		event_hf_indication(EV_HF_SUBSCRIBER_NUMBER_IND, "00000000");
+	}
+	bse_log_info(TAG, "%s->%d, hlp_hf_get_current_calls was called", __func__, __LINE__);
+	if(!s_ft_hf_get_calls)
+		s_ft_hf_get_calls = FsmAddTimer(NULL, 500, 0, NULL, NULL, (UINT32)hlp_hf_get_currnet_calls_timer);
+	hlp_hf_connect_complete(bd, role);
+
+	if(!s_hf_user_data)
+		return ;
+	if(s_hf_user_data->ft_hf_connect) {
+		FSM_DelTimer(&s_hf_user_data->ft_hf_connect);
+		s_hf_user_data->ft_hf_connect = NULL;
+	}
+
+	s_hf_user_data->ft_hf_connect = FsmAddTimer(NULL, 3000, 0, NULL, NULL, (UINT32)hlp_hf_timer_connect_ind);
+}
+
+void hlp_hf_slc_release(struct HFP_SLCConnectInfoStru *info)
+{
+	bse_log_api(TAG, "\r\n-->HFP_EV_SLC_RELEASED_IND...\r\n");
+
+	if(!s_hf_user_data)
+		return ;
+	if(s_hf_user_data->ft_hf_connect) {
+		FSM_DelTimer(&s_hf_user_data->ft_hf_connect);
+		s_hf_user_data->ft_hf_connect = NULL;
+	}
+
+	HF_USER_DATA->flag_incomming_call_num = FALSE;
+	HF_USER_DATA->hf_ringcount = 0x00;
+	HF_USER_DATA->do_disconnect_flag = 0;
+
+	if (hlp_hf_get_status() >= ST_HF_CONNECTED) {
+		hlp_hf_set_status(ST_HF_READY);
+		event_hf_indication(EV_HF_DISCONNECTED, info->bd);
+	}
+	s_hf_user_data->sco_connection_state = HF_SCO_DISCONNECTED;
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+	hlp_hf_3_way_clean_call_list();
+#endif
+}
+
+void hlp_hf_connecting(UINT8 *bd)
+{
+	bse_log_api(TAG, "\r\nHFP_EV_CONNECT_IND\r\n");
+	if (hlp_hf_get_status() == ST_HF_READY) {
+		hlp_hf_set_status(ST_HF_CONNECTING);
+	}
+	if(hlp_hf_get_status() != ST_HF_CONNECTING)
+		event_hf_indication(EV_HF_CONNECTING, bd);
+}
+
+void hlp_hf_get_phone_manu_and_model(void)
+{
+	HFP_HF_GetPhoneManuModel(HF_USER_DATA->hfp_hdl);
+}
+
+void hlp_hf_connect_fail(struct HFP_ConnectEvStru *info)
+{
+	bse_log_api(TAG, "\r\nConnect failed\r\n");
+
+	if(hlp_hf_get_status() == ST_HF_CONNECTING) {
+		hlp_hf_set_status(ST_HF_READY);
+		event_hf_indication(EV_HF_CONNECT_FAIL, info->bd);
+		if(info->result != ER_HFP_CLIENT_STOP) {
+			event_hf_indication(EV_HF_DISCONNECTED, info->bd);
+		}
+	}
+}
+
+void hlp_hf_disconnect_complete(struct HFP_ConnectEvStru *info)
+{
+	bse_log_api(TAG, "\r\nDisconnected. state=%d\r\n", hlp_hf_get_status());
+
+	if(hlp_hf_get_status() > ST_HF_READY) {
+		hlp_hf_set_status(ST_HF_READY);
+		event_hf_indication(EV_HF_DISCONNECTED, info->bd);
+	}
+}
+
+void hlp_hf_get_manufacturers_name(UINT8 *param)
+{
+	if (param != NULL) {
+		UINT32 param_len = strlen(param);
+		UINT8 *p_head = strstr(param, "+CGMI: ");
+		UINT8 *p_end;
+
+		if ((p_head != NULL) && ((p_end = strstr(p_head, "\r\n")) != NULL)) {
+			UINT8 *p_name = NEW(param_len);
+
+			p_head += strlen("+CGMI: ");
+
+			memset(p_name, 0, param_len);
+			if (*p_head == '"') {
+				memcpy(p_name, p_head+1, (p_end-1)-(p_head+1));
+			} else {
+				memcpy(p_name, p_head, p_end-p_head);
+			}
+
+			event_hf_indication(EV_HF_AG_DEVICE_VENDOR_NAME, p_name);
+			FREE(p_name);
+		}
+	}
+}
+
+void hlp_hf_get_module_name(UINT8 *param)
+{
+	if (param != NULL) {
+		UINT32 param_len = strlen(param);
+		UINT8 *p_head = strstr(param, "+CGMM: ");
+		UINT8 *p_end;
+		UINT8 *p_name = NEW(param_len);
+
+		if ((p_head != NULL) && ((p_end = strstr(p_head, "\r\n")) != NULL) && (p_name != NULL)) {
+			p_head += strlen("+CGMM: ");
+
+			memset(p_name, 0, param_len);
+			memcpy(p_name, p_head, p_end-p_head);
+
+			bse_log_api(TAG, "hlp_hf_get_module_name, p_name=%s\r\n", p_name);
+			if(strstr(p_name, "iPhone"))
+				iphone_flag_g = 1;
+
+			event_hf_indication(EV_HF_AG_DEVICE_MODEL, p_name);
+		}
+		if (p_name != NULL) {
+			FREE(p_name);
+		}
+	}
+}
+
+void hlp_hf_get_os_version(UINT8 *p_version, UINT16 param_len)
+{
+	if (p_version != NULL) {
+		UINT8 *p_head = strstr(p_version, "+CGMR: ");
+		UINT8 *p_end;
+
+		if ((p_head != NULL) && ((p_end = strstr(p_head, "\r\n")) != NULL)) {
+			UINT8 *p_dest = NEW(param_len);
+			p_head += strlen("+CGMR: ");
+
+			memset(p_dest, 0, param_len);
+			memcpy(p_dest, p_head, p_end-p_head);
+			bse_log_api(TAG, "hlp_hf_gte_os_version, p_dest=%s\r\n", p_dest);
+			event_hf_indication(EV_HF_AG_OS_VERSION_IND, p_dest);
+			FREE(p_dest);
+		}
+	}
+}
+
+int sco_tx_packet_length = 120;
+void hlp_hf_set_tx_packet_length(UINT16 len){
+   bse_log_info(TAG,"%s len = 0x%X\n", __func__, len);
+   if(len != 0x0) {
+        sco_tx_packet_length = len; 
+   } else {
+        sco_tx_packet_length = 60; 
+   }
+   bse_log_info(TAG,"%s sco_tx_packet_length = %d\n", __func__, sco_tx_packet_length);
+}
+
+int hlp_hf_get_tx_packet_length() {
+   bse_log_info(TAG,"%s sco_tx_packet_length = %d\n", __func__, sco_tx_packet_length);
+   return sco_tx_packet_length;
+}
+
+UCHAR hlp_hf_event_cbk(UINT8 *hdl, UCHAR event, UCHAR* param, UINT16 param_len)
+{
+	if (hlp_hf_get_status() == ST_HF_UNINIT) {
+		bse_log_error(TAG, "hlp_hf_event_cbk, profile application not initialized!\r\n");
+		return 1;
+	}
+	bse_log_api(TAG, "hlp_hf_event_cbk state=%d, event=%d", hlp_hf_get_status(), event);
+
+	switch(event) {
+	case HFP_EV_RINGING_IND:
+		hlp_hf_ring_ind(param);
+		break;
+	case HFP_EV_TERMINATE_LOCAL_RINGTONE_IND:
+		hlp_hf_terminate_local_ringtone_ind();
+		break;
+	case HFP_EV_GENERATE_INBAND_RINGTONE_IND:
+		event_hf_indication(EV_HF_RINGTONE_TERMINATED, (void *)1);
+		break;
+	case HFP_EV_STANDBY_IND:
+		hlp_hf_standby(param);
+		break;
+	case HFP_EV_INCOMINGCALL_IND:
+		hlp_hf_dial_ind_ex(event, param);
+		break;
+	case HFP_EV_OUTGOINGCALL_IND:
+		hlp_hf_dial_ind_ex(event, param);
+		break;
+	case HFP_EV_ONGOINGCALL_IND:
+		{
+			hlp_hf_dial_ind_ex(event, param);
+		}
+		break;
+	case HFP_EV_CALLHELD_IND:
+		bse_log_info(TAG, "-->The incoming call is on hold!\r\n");
+		break;
+	case HFP_EV_CALL_WAITING_IND:
+#ifndef CONFIG_DEFINE_BT_EVENT
+		{
+			bse_log_info(TAG, "-->The 3way incoming call ind, hung up!\r\n");
+			//HFP_HF_3WayCallingHandler(HF_USER_DATA->hfp_hdl, 0, 0);
+		}
+#endif
+		break;
+	case HFP_EV_CLIP_IND: {
+		struct HFP_PhoneInfoStru *call_info = (struct HFP_PhoneInfoStru *)param;
+
+		hlp_hf_dial_num_ind(event, (CHAR *)(call_info->number));
+	}
+	break;
+	case HFP_EV_CALLON_CHLDHOLD_ACTIVATED_IND:
+		//TODO
+		break;
+	case HFP_EV_CALLON_CHLDHOLD_RELEASED_IND:
+		//TODO
+		break;
+	case HFP_EV_CURRENT_CALLS_IND:
+		hlp_hf_current_calls_ind(param);
+		break;
+	case HFP_EV_AUDIO_CONN_ESTABLISHED_IND: {
+		struct HFP_ScoConnectEvStru* sco_stru = (struct HFP_ScoConnectEvStru*) param;
+		if (sco_stru) {
+			printf("[wl_debug] sco_stru->sco_handle = %d\n", sco_stru->sco_handle);
+			hlp_hf_audio_established((UINT16)sco_stru->sco_handle, sco_stru->select_codec == HFP_CODECID_MSBC ? 1 : 0);
+		}
+	}
+	break;
+	case HFP_EV_AUDIO_CONN_RELEASED_IND: {
+		hlp_hf_audio_release();
+	}
+	break;
+	case HFP_EV_SLC_ESTABLISHED_IND: {
+		struct HFP_SLCConnectInfoStru *info = (struct HFP_SLCConnectInfoStru *)param;
+		UINT8 ret;
+		hlp_hf_get_sub_num();//get Subscriber Number
+		g_vendor_itf->vendor_on_codec_configured(info->select_codec);
+
+		bse_log_info(TAG, "[WBS]SCL Conn codec_default(%d) 1-cvsd 2-wbs\r\n",info->select_codec);
+		hlp_hf_slc_established(info->bd, info->role);
+		//hlp_hf_get_phone_manu_and_model();		//Getted it, in hfp_hf.c(601)
+		
+		if(hlp_get_nrec_disable_config() == TRUE) {
+			bse_log_info(TAG, "[NREC_TEST]#######HFP_HF_DisableNREC---->");
+			HFP_HF_DisableNREC(HF_USER_DATA->hfp_hdl);
+		}
+		//bse_log_api(TAG,"%x  %d\r\n",info->remote_features,info->remote_features & HFP_SDP_AG_INBANDRING);
+	        ret = (info->remote_features & HFP_SDP_AG_INBANDRING) == 8 ? 1:0;
+		event_hf_indication(EV_HF_RINGTONE,&ret);
+		
+		if(info->role == HFP_ROLE_HF_SERVER) {
+			bse_log_info(TAG, "HF Connection Incoming.\r\n");
+		} else {
+			bse_log_info(TAG, "HF Connection Other(%d),server_handle(%x).\r\n",info->role,info->server_handle);
+		}
+
+		/*bt_remote_device_t *r_dev = hlp_manager_find_target_device(info->bd);
+		if(r_dev != NULL)
+		{
+			event_hf_indication(EV_HF_DEV_INFO, (void *)r_dev);
+		} else {
+			bse_log_info(TAG, "hlp_manager_find_target_device is NULL");
+			r_dev = hlp_gap_find_paired_device(info->bd);
+			if(r_dev != NULL)
+				event_hf_indication(EV_HF_DEV_INFO, (void *)r_dev);
+		}*/
+
+	}
+	break;
+	case HFP_EV_SLC_RELEASED_IND:
+		HF_USER_DATA->hfp_hdl = NULL;
+		//s_hf_server_channel = 0;
+		hlp_hf_slc_release(param);
+		break;
+	case HFP_EV_CONNECT_CFM: {
+		struct HFP_ConnectEvStru *info = (struct HFP_ConnectEvStru *)param;
+		HF_USER_DATA->hfp_hdl = info->handle;
+		event_hf_indication(EV_HF_CONN_CFM, info->bd);
+		if (s_hf_user_data->disconnect_delay == 1) {
+			s_hf_user_data->disconnect_delay == 0;
+			HFP_Client_Stop(info->handle);
+		}
+	}
+	break;
+	case HFP_EV_CONNECT_IND: {
+		struct HFP_ConnectEvStru *info = (struct HFP_ConnectEvStru *)param;
+
+		HF_USER_DATA->hfp_hdl = info->handle;
+		hlp_hf_connecting(info->bd);
+	}
+	break;
+	case HFP_EV_DISCONNECT_COMPLETE: {
+		struct HFP_ConnectEvStru *info = (struct HFP_ConnectEvStru *)param;
+
+		HF_USER_DATA->hfp_hdl = NULL;
+		bse_log_info(TAG, "hfp disconnect complete result:%d\r\n", info->result);
+		if(info->result == ER_HFP_RFCOMM_CONNECT_FAILED || info->result == ER_HFP_SDAP_FAILED) {
+			hlp_hf_connect_fail(param);
+		} else {
+			iphone_flag_g = 0;
+			hlp_hf_disconnect_complete(param);
+		}
+		memset(s_hf_user_data->hf_local_num, 0, sizeof(s_hf_user_data->hf_num));
+	}
+	break;
+	case HFP_EV_SERVER_START_CFM:
+		if (param != NULL) {
+			struct HFP_RegServerStru *server = (struct HFP_RegServerStru *)param;
+
+			bse_log_info(TAG, "Server start success.\r\n");
+			if (server->role == HFP_ROLE_HF_SERVER) {
+				HF_USER_DATA->hfp_serverhdl = hdl;
+				bse_log_info(TAG, "hfp_serverhdl got.\r\n");
+			} else if(server->role == HFP_ROLE_HS_SERVER) {
+				HF_USER_DATA->hsp_serverhdl = hdl;
+				bse_log_info(TAG, "hsp_serverhdl got.\r\n");
+			}
+#ifdef CONFIG_CONNECTION_ATHENTICATE_REQUIRED
+			hlp_hfp_set_security(server->server_channel);
+#endif
+		} else {
+			bse_log_info(TAG, "Server start failed.\r\n");
+		}
+		break;
+	case HFP_EV_EXTEND_CMD_IND:
+		break;
+	case HFP_EV_HF_MANUFACTURERID_IND:					    /* 56 ManufacturerID, a null-terminated ASCII string. */
+		hlp_hf_get_manufacturers_name(param);
+		break;
+	case HFP_EV_HF_MODELID_IND:								/* 57 ModelID, a null-terminated ASCII string. */
+		hlp_hf_get_module_name(param);
+		break;
+	case HFP_EV_HF_VERSION_IND:
+		hlp_hf_get_os_version(param, param_len);
+		break;
+	case HFP_EV_TRANSPARENT_SUBMITCIEV_IND: {
+		UINT8 indicator = *(UINT8 *)param;
+		bse_log_info(TAG, "HFP_EV_TRANSPARENT_SUBMITCIEV_IND, indicator= %02x\r\n", indicator);
+		//if (indicator >= 0x10 && indicator < 0x40)
+		/* usr for callheld */
+			//printf("HFP_EV_TRANSPARENT_SUBMITCIEV_IND %d ", hlp_hf_get_status());
+
+			if (indicator == 22 && s_hf_user_data->sco_connection_state == HF_SCO_DISCONNECTED && hlp_hf_get_status() >= ST_HF_CONNECTED) {
+				bse_log_info(TAG, "HFP_EV_TRANSPARENT_SUBMITCIEV_IND simi");
+				event_hf_indication(EV_HF_SCO_DISCONNECTED, NULL);
+			}
+
+			if(hlp_hf_get_status() >= ST_HF_CONNECTED)
+			{
+				//hlp_hf_get_current_calls();
+				bse_log_info(TAG, "hlp_hf_get_current_calls time start11");
+				/*if(!s_ft_hf_get_calls){
+					bse_log_info(TAG, "hlp_hf_get_current_calls time start");
+					s_ft_hf_get_calls = FsmAddTimer(NULL, 100, 0, NULL, NULL, (UINT32)hlp_hf_get_current_calls);//500
+				}*/
+					
+				if(!s_ft_hf_get_calls_not_active){
+					bse_log_info(TAG, "hlp_hf_get_current_calls time start");
+					s_ft_hf_get_calls_not_active = FsmAddTimer(NULL, 100, 0, NULL, NULL, (UINT32)hlp_hf_get_current_calls);//500
+			}
+		}
+	}
+	break;
+	case HFP_EV_NETWORK_OPERATOR_IND: {
+		UINT8 network_operator[20];		//+COPS, the operator name shall not exceed 16 characters.
+		struct HFP_COPSInfoStru *p_data = (struct HFP_COPSInfoStru *)param;
+
+		memset(network_operator, 0, sizeof(network_operator));
+		//p_data.format, 0 mean short and 1 mean long string format, and 2 mean number format.
+		if ((p_data->format >= 0) && (p_data->format <= 2)) {
+			network_operator[0] = '0'+p_data->format;
+			if(p_data->operator_name[0])
+			{
+				network_operator[1] = ',';
+				memcpy(network_operator+2, p_data->operator_name, p_data->operator_len);
+			}
+			event_hf_indication(EV_HF_NETWORK_OPERATOR_IND, network_operator);
+		}
+
+		bt_remote_device_t *r_dev = hlp_manager_find_target_device(s_hf_address);
+		if(r_dev != NULL) {
+			event_hf_indication(EV_HF_DEV_INFO, (void *)r_dev);
+		} else {
+			UINT8 addr_d[BD_ADDR_LEN] = {0};
+			UINT8 name_d[DEV_NAME_LEN + 1] = {0};
+			
+			hlp_manager_get_romete_info_ex(addr_d, name_d);
+			bse_log_info(TAG, "name_d = %s", name_d);
+
+			bt_remote_device_t *r_dev_d = (bt_remote_device_t *)NEW(sizeof(bt_remote_device_t)+1);
+			if(r_dev_d != NULL)
+			{
+				memset(r_dev_d->bd, 0, BD_ADDR_LEN);
+				memset(r_dev_d->name, 0, DEV_NAME_LEN + 1);
+
+				memcpy(r_dev_d->bd, addr_d, BD_ADDR_LEN);
+				memcpy(r_dev_d->name, name_d, DEV_NAME_LEN + 1);
+
+				event_hf_indication(EV_HF_DEV_INFO, (void *)r_dev_d);
+				FREE(r_dev_d);
+			}
+		}
+	}
+	break;
+	case HFP_EV_SIGNAL_STRENGTH_IND:
+		bse_log_info(TAG, "Remote phone signal strength = %d\r\n", *(UINT8 *)param);
+		event_hf_indication(EV_HF_SIGNAL_STRENGTH_IND, (void *)(UINT32) *((UINT8 *)param));
+		break;
+	case HFP_EV_BATTERY_CHARGE_IND:
+		bse_log_info(TAG, "Remote phone battery charge = %d\r\n", *(UINT8 *)param);
+		event_hf_indication(EV_HF_BATTERY_CHARGE_IND, (void *)(UINT32) *(UINT8 *)param);
+		break;
+	case HFP_EV_SUBSCRIBER_NUMBER_IND: {
+		struct HFP_PhoneInfoStru *phone_info = (struct HFP_PhoneInfoStru *)param;
+		bse_log_api(TAG, "Remote phone number\r\n");
+		if (phone_info != NULL) {
+			/*
+			if(strlen(phone_info->number) > 0) {
+				bse_log_info(TAG, "phone info number is %s, len is %d\r\n", phone_info->number, strlen(phone_info->number));
+				event_hf_indication(EV_HF_SUBSCRIBER_NUMBER_IND, (void *)phone_info->number);
+			}
+			*/
+			if(strlen(phone_info->number) <= 0) {
+				memset(phone_info->number, 0, HFP_PHONENUM_MAX_DIGITS);
+				memcpy(phone_info->number, "00000000", 8);
+			}
+			bse_log_info(TAG, "phone info number is %s, len is %d\r\n", phone_info->number, strlen(phone_info->number));
+			memset(s_hf_user_data->hf_local_num, 0, HF_NUM_LEN);
+			memcpy(s_hf_user_data->hf_local_num, phone_info->number, strlen(phone_info->number));
+
+			event_hf_indication(EV_HF_SUBSCRIBER_NUMBER_IND, (void *)phone_info->number);
+		}
+	}
+	break;
+	case HFP_EV_ATCMD_RESULT_IND: {
+		struct HFP_ATCmdResultStru *ret = (struct HFP_ATCmdResultStru *)param;
+		bse_log_info(TAG, "HFP_EV_ATCMD_RESULT_IND, 0x%x, %d\r\n", ret->cmd_code, ret->result_code);
+		if(ret->cmd_code == HFP_HFC_CHUP || ret->cmd_code == HFP_HFC_ATA || ret->cmd_code == HFP_HFC_CHLD_2) 
+		{
+			bse_log_info(TAG, "%s->%d: hlp_hf_get_currnet_calls_timer 1000 was called", __func__, __LINE__);
+			if(!s_ft_hf_get_calls)
+				s_ft_hf_get_calls = FsmAddTimer(NULL, 500, 0, NULL, NULL, (UINT32)hlp_hf_get_currnet_calls_timer);
+		}
+#ifdef CONFIG_HF_SUPPORT_3_WAY_CALL
+		if (ret->cmd_code == HFP_HFC_CLCC) {
+			hlp_hf_3_way_call_check_mark();
+		}
+#endif
+	}
+	break;
+	case HFP_EV_ROAMING_RESET_IND: {
+		event_hf_indication(EV_HF_ROAMING_STATE_IND, HF_ROAMING_RESET);
+	}
+	break;
+	case HFP_EV_ROAMING_ACTIVE_IND: {
+		//event_hf_indication(EV_HF_ROAMING_STATE_IND, HF_ROAMING_ACTIVE);
+		//Error[Pe167]: argument of type "enum <unnamed>#91" is incompatible with parameter of type "void *" G:\development_board\AMT630HV100_BSP\brtstack\brt_aud3_sdk_freertos\sdk\auto_app\internal_hf.c 1531 
+	}
+	break;
+	case HFP_EV_NETWORK_AVAILABLE_IND: {
+		//event_hf_indication(EV_HF_NETWORK_STATE_IND, HF_NETWORK_AVAILABLE);
+	}
+	break;
+	case HFP_EV_NETWORK_UNAVAILABLE_IND: {
+		event_hf_indication(EV_HF_NETWORK_STATE_IND, HF_NETWORK_UNAVAILABLE);
+	}
+	break;
+	case HFP_EV_VOICE_RECOGN_ACTIVATED_IND: {
+		event_hf_indication(EV_HF_VOICE_RECOGN_START, NULL);
+	}
+	break;
+	case HFP_EV_VOICE_RECOGN_DEACTIVATED_IND: {
+		event_hf_indication(EV_HF_VOICE_RECOGN_STOP, NULL);
+	}
+	break;
+	case HFP_EV_AUDIO_CONN_CODEC_IND:
+		hlp_hf_codec_connection_cbk(*((UINT8 *) param));
+	break;
+	case HFP_EV_AUDIO_CONN_TX_PACKET_LENGTH:
+		hlp_hf_set_tx_packet_length(*((UINT16 *) param));
+	break;
+	default:
+		break;
+	}
+
+	bse_log_info(TAG, "hlp_hf_event_cbk state=%d, event=%d Exit\r\n", hlp_hf_get_status(), event);
+
+	return 1;
+}
+
+UINT8 *hlp_hf_get_handle(void)
+{
+	return HF_USER_DATA->hfp_hdl;
+}
+
+UINT8 *hlp_hf_get_hfp_server_handle(void)
+{
+	return HF_USER_DATA->hfp_serverhdl;
+}
+
+UINT8 *hlp_hf_get_hsp_server_handle(void)
+{
+	return HF_USER_DATA->hsp_serverhdl;
+}
+
+static void hlp_hf_codec_connection_cbk(UINT8 codec)
+{
+	bse_log_info(TAG, "codec connected:%d.", codec);
+	if (g_vendor_itf->vendor_wbs_config) {
+		g_vendor_itf->vendor_wbs_config((codec == HFP_CODECID_MSBC) ? 1 : 0);
+	}
+}
+
+void hlp_hf_set_sco_handle(UINT16 handle)
+{
+	HF_USER_DATA->sco_hdl = handle;
+    return;
+}
+
+UINT16 hlp_hf_get_sco_handle(void)
+{
+	return HF_USER_DATA->sco_hdl;
+}
+
+void hlp_hf_event_OK()
+{
+	event_hf_indication(EV_HF_OK, NULL);
+}
+
+
+char *hlp_hf_hyposensitization_mange(char *p, int len)
+{
+	char p_num[31] = {0};
+	int i = 0;
+	memcpy(p_num, p, len); 
+
+	if(len < 11) { //短号
+		
+		for(i = 0; i < len; i++)
+		{
+			p_num[i] = '*';
+		}
+	} else { //+86&座机号码 if (len == 11 || len == 10)
+		for(i = 0; i < 4; i++)
+		{
+			p_num[len - 8 + i] = '*';
+		}
+	}
+	printf("p_num = %s\n", p_num);
+	return p_num;
+}

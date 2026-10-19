@@ -1,0 +1,10 @@
+﻿==== btsnoop_hci_260911_105904.log size=497608
+   raw occurrence of desc head: 2 [221328, 225129]
+   in reassembled L2CAP PDU: 2
+      pkt#2475  l2cap_pdu_len=793  desc_off=528  desc_len=39 tail_found=True
+        ctx before : 01 09 02 06 35 2D 35 2B 08 22 25 27
+        descriptor : 05 0C 09 01 A1 01 85 02 09 CD 09 B5 09 B6 09 E9 09 EA 09 E2 09 B7 15 00 25 01 75 01 95 07 81 02 95 01 75 01 81 01 C0
+      pkt#2552  l2cap_pdu_len=239  desc_off=170  desc_len=39 tail_found=True
+        ctx before : 01 09 02 06 35 2D 35 2B 08 22 25 27
+        descriptor : 05 0C 09 01 A1 01 85 02 09 CD 09 B5 09 B6 09 E9 09 EA 09 E2 09 B7 15 00 25 01 75 01 95 07 81 02 95 01 75 01 81 01 C0
+      first hit raw pkt: 02 04 20 1D 03 19 03 53 00 07 00 00 03 14 03 11 36 03 0E 35 66 09 00 00 0A 00 01 00 00 09 00 01 35 06 19 11 1E 19 12 03 09 00 04 35 0C 35 03 19 01 00 35 05 19 00 03 08 01 09 00 05 35 03 19 10 02 09 00 06 35 09 09 65 6E 09 00 6A 09 01 00 09

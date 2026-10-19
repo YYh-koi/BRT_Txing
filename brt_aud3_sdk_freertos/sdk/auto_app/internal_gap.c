@@ -1,0 +1,2243 @@
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*
+* Copyright (c) 1999-2014 BARROT Corporation
+*
+* All rights reserved.
+*
+---------------------------------------------------------------------------*/
+
+/**********************************************************************
+*	File Name:		hlp_gap.c
+*
+*	Description:
+*
+*
+*	Create Date:		2014/07/31
+***********************************************************************/
+
+#include "auto_gap.h"
+#include "gap_ui.h"
+#include "internal_gap.h"
+#include "hci_ui.h"
+#include "auto_commfunc.h"
+#include "internal_manager.h"
+#include "auto_at_internal.h"
+#include "bt_power_manager.h"
+#include "hci_stru.h"
+#include "vendor_interface.h"
+#ifdef PATCH_RECONN
+#include "patch_reconn.h"
+#endif
+#include "brt_trace.h"
+#include "internal_hf.h"
+#include "auto_hf.h"
+#include "internal_pbap.h"
+#include "transport_tl.h"
+
+#include "auto_a2dp.h"
+#include "bt_manager.h"
+#include "brtbt_interface.h"
+
+#ifdef CONFIG_GATT
+#include "auto_gatt_server.h"
+#endif
+
+#define TAG "bse_gap"
+
+static UINT16 s_current_hci_handle = 0;
+static int user_accq = 1;
+static int ssp_mode_x = 1;
+static int iocap_mode_x = 1;
+static  struct HCI_AddressStru s_addr[2] = {0};
+static struct remote_dev_list_str  s_new_remote_devlist = {0};
+struct ListStru  s_eir_data_list = {NULL,NULL};
+
+struct GAPUserDataStru {
+	HANDLE tl_handle;
+	UINT8 state;
+	UINT8 init_state;
+	UINT8 s_mode; /* scan mode */
+	module_event_cbk_t event_cbk;
+};
+
+static struct GAPUserDataStru *s_gap_user_data = NULL;
+
+enum {
+    ST_DISCOVERY_DONE,
+    ST_DISCOVERY_ONGOING,
+    ST_DISCOVERY_CANCELLING, // cancelDiscovery is asynchronous.
+    ST_DISCOVERY_WAIT, // occurs when try to discover in ST_DISCOVERY_CANCELLING state.
+};
+
+enum {
+    BT_INIT_PROC_NULL,
+    BT_INIT_PROC_BEGIN,
+    BT_INIT_PROC_RESET,
+    BT_INIT_PROC_SET_COD,
+    BT_INIT_PROC_SET_LOC_NAME,
+    BT_INIT_PROC_GET_LOC_ADDR,
+    BT_INIT_PROC_SET_OTHER_ATTR
+};
+
+/* device discovery control block(cb). */
+typedef struct tag_device_discovery_cb {
+	bt_discovery_callback evt_cb;
+	UINT8 discovery_state;
+	struct ListStru dev_list;
+	SYSTEM_LOCK lock;
+} device_discovery_cb_t;
+
+//discorvery
+static device_discovery_cb_t *s_discovery_cb = NULL;
+// FIXME support multiple devices connected?
+static UINT16 s_current_acl_handle = 0xFFFF;
+
+/* discovery callbacks registered into Stack.*/
+static void on_device_discovery_finished(void *context, UINT16 result, struct GAP_DeviceDiscoveryCfmStru *cfm);
+static tGAP_IndCbk_Result on_remote_device_found(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct GAP_RemoteDeviceInfoStru *src_dev, UINT32 size);
+static tGAP_IndCbk_Result on_remote_device_name_updated(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct HCI_Remote_Name_Request_CompleteEvStru *src_dev, UINT32 size);
+static void on_remote_device_bonded(UINT8 *remote_bd);
+
+#ifdef GAP_IO_CAPABILITIES_FULL
+static tGAP_IndCbk_Result hlp_gap_passkey_req_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct HCI_User_Passkey_RequestEvStru *par, UINT32 size);
+static tGAP_IndCbk_Result hlp_gap_passkey_notify_ind(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct HCI_User_Passkey_NotificationEvStru *par, UINT32 size);
+static tGAP_IndCbk_Result hlp_gap_ssp_complete_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+#endif
+//end
+
+tGAP_IndCbk_Result hlp_gap_link_key_notify_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_req_pin_code_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_authentication_failure_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_req_link_key_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_req_usr_cfm_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_conn_event_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_conn_req_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_vendor_event_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_hardware_error_event_cbk(HANDLE tl_handle, void *context,tGAP_Ind_Type ind_type, void *par, UINT32 size);
+tGAP_IndCbk_Result hlp_gap_authorize_request_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size);
+
+static void hlp_gap_set_visibility_cbk(void *context, UINT16 result, void *cfm_par);
+static struct FsmTimer * s_bonding_timer = NULL;
+static void hlp_guard_bonding_result(UINT8 *bd);
+static void hlp_gap_vendor_itf_callback(UINT8 event, void *param);
+vendor_interface_t *g_vendor_itf = NULL;
+
+static void do_reset_hardware();
+static void do_set_class_of_device();
+static void do_set_local_name();
+static void do_set_other_attribute();
+
+#ifdef CONFIG_IAP
+void hlp_gap_add_carplay_uuid(void)
+{
+	UINT8 tx_power_level = 0x0A;
+	UINT8 carplay_eir_uuid[16] = {0xEC, 0x88, 0x43, 0x48, 0xCD, 0x41, 0x40, 0xA2, 0x97, 0x27, 0x57, 0x5D, 0x50, 0xBF, 0x1F, 0xD3};
+	app_gap_add_eir(carplay_eir_uuid, 16, HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS);
+	app_gap_add_eir(&tx_power_level, 1, HCI_EIR_DATATYPE_TX_POWER_LEVEL);
+}
+
+void hlp_gap_add_iap2_uuid(void)
+{
+	UINT8 iap2_eir_uuid[16] = {0x00, 0x00, 0x00, 0x00, 0xDE, 0xCA, 0xFA, 0xDE, 0xDE, 0xCA, 0xDE, 0xAF, 0xDE, 0xCA, 0xCA, 0xFF};
+	app_gap_add_eir(iap2_eir_uuid, 16, HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS);
+}
+#endif
+
+#ifdef CONFIG_AAP
+void hlp_gap_add_aa_uuid(void)
+{
+	UINT8 AA_eir_uuid[16] = {0x4D, 0xE1, 0x7A, 0x00, 0x52, 0xCB, 0x11, 0xE6, 0xBD, 0xF4, 0x08, 0x00, 0x20, 0x0C, 0x9A, 0x66};
+	app_gap_add_eir(AA_eir_uuid, 16, HCI_EIR_DATATYPE_INCOMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS);
+}
+#endif
+
+#ifdef CONFIG_EC
+void hlp_gap_register_gatt_ec_uuid(void)
+{
+	bt_uuid_t uuid16;
+	UINT8 ec_eir_uuid[16] ={0x00, 0x00, 0xb3, 0x60, 0xd6, 0xd8, 0xc7, 0xec, 0xbd, 0xf0, 0xea, 0xb1, 0xbf, 0xc6, 0xbc, 0xbc};
+	memcpy(uuid16.uu, ec_eir_uuid, 16);
+	app_gatt_server_register_app(uuid16);
+}
+#endif
+
+#ifdef CONFIG_EY
+void hlp_gap_register_gatt_ey_uuid(void)
+{
+	bt_uuid_t uuid16;
+	UINT8 ey_eir_uuid[16] ={0x00, 0x00, 0xaa, 0xa0, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb};
+	memcpy(uuid16.uu, ey_eir_uuid, 16);
+	app_gatt_server_register_app(uuid16);
+}
+#endif
+
+#ifdef CONFIG_GATT
+void hlp_gap_register_gatt_clcast_uuid(void)
+{
+	bt_uuid_t uuid16;
+	UINT8 clcast_eir_uuid[16] = {0x00, 0x00, 0xff, 0xe0, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0xc9, 0xef, 0xde, 0xfd, 0xef, 0x9f};
+	memcpy(uuid16.uu, clcast_eir_uuid, 16);
+	app_gatt_server_register_app(uuid16);
+}
+#endif
+
+void reset_dev_list(void)
+{
+    if (s_new_remote_devlist.list) {
+        ENTER_CRITICAL(s_new_remote_devlist.lock);
+        NewListRemoveAll(s_new_remote_devlist.list);
+        LEAVE_CRITICAL(s_new_remote_devlist.lock);
+        BtNewListFree(s_new_remote_devlist.list);
+        s_new_remote_devlist.list = NULL;
+    }
+    if (s_new_remote_devlist.lock) {
+        FREE_CRITICAL(s_new_remote_devlist.lock);
+    }
+    memset(&s_new_remote_devlist, 0, sizeof(struct remote_dev_list_str));
+    s_new_remote_devlist.list =  BtNewListNew(sizeof(bt_remote_device_t));
+    s_new_remote_devlist.lock = CREATE_CRITICAL(NULL);
+}
+
+void hlp_gap_event_cbk(UINT32 event, void *param)
+{
+	if (s_gap_user_data && s_gap_user_data->event_cbk != NULL) {
+		s_gap_user_data->event_cbk((PROFILE_ID_GAP << 8) | event, param);
+	}
+}
+
+static void on_init_state_changed(UINT8 state)
+{
+	bse_log_info(TAG,"\r\n %s state = %d s_gap_user_data->init_state = %d\r\n", __func__, state, s_gap_user_data->init_state);
+	if (s_gap_user_data->init_state >= state) {
+		return;
+	}
+
+	s_gap_user_data->init_state = state;
+
+	switch (state) {
+	case BT_INIT_PROC_BEGIN:
+		do_reset_hardware();
+		break;
+	case BT_INIT_PROC_RESET:
+		do_set_class_of_device();
+		break;
+	case BT_INIT_PROC_SET_COD:
+		do_set_local_name();
+		break;
+	case BT_INIT_PROC_SET_LOC_NAME:
+		hlp_gap_get_local_device_addr();
+		break;
+	case BT_INIT_PROC_GET_LOC_ADDR:
+		do_set_other_attribute();
+		break;
+	case BT_INIT_PROC_SET_OTHER_ATTR:
+		hlp_gap_set_status(ST_GAP_WORKING);
+		g_vendor_itf->vendor_on_gap_started();
+		hlp_gap_event_cbk(EV_APP_GAP_STARTED, g_vendor_itf->vendor_get_firmware_version());
+		break;
+
+	}
+}
+
+void hlp_gap_init(module_event_cbk_t event_cbk)
+{
+	if (s_gap_user_data == NULL) {
+		s_gap_user_data = (struct GAPUserDataStru *)NEW(sizeof(struct GAPUserDataStru));
+	}
+
+	memset(s_gap_user_data, 0, sizeof(struct GAPUserDataStru));
+	s_gap_user_data->event_cbk = event_cbk;
+	s_gap_user_data->init_state = BT_INIT_PROC_NULL;
+	s_gap_user_data->s_mode = (TRUE << BT_SET_SCAN_MODE_TYPE_SCAN) | (TRUE << BT_SET_SCAN_MODE_TYPE_PAIR);
+	g_vendor_itf = vendor_interface_create();
+	g_vendor_itf->vendor_init(hlp_gap_vendor_itf_callback);
+	hlp_gap_tl_init();
+	hlp_gap_set_status(ST_GAP_INIT);
+	reset_dev_list();
+}
+
+void hlp_gap_start(void)
+{
+	bt_remote_device_t *rmt_dev;
+#ifndef GAP_IO_CAPABILITIES_FULL
+	GAP_SetIOCapability(HCI_IO_CAPABILITY_DISPLAYONLY);
+#else
+	if(iocap_mode_x == 2)
+	{
+		GAP_SetIOCapability(HCI_IO_CAPABILITY_KEYBOARDONLY);
+	}
+	else if(iocap_mode_x == 1)
+	{
+		GAP_SetIOCapability(HCI_IO_CAPABILITY_DISPLAYONLY);
+	}	
+	else if(iocap_mode_x == 0)
+	{
+		GAP_SetIOCapability(HCI_IO_CAPABILITY_DISPLAYYESNO);
+	}
+		
+#endif
+	GAP_RegisterIndCbk(NULL, GAP_IND_LINK_KEY_NOTIFICATION, hlp_gap_link_key_notify_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_LINK_KEY_REQUEST, hlp_gap_req_link_key_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_PIN_CODE_REQ, hlp_gap_req_pin_code_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_AUTHENTICATION_FAILURE, hlp_gap_authentication_failure_cbk);
+	/* BT2.1(BR/EDR) SSP */
+#ifdef GAP_IO_CAPABILITIES_FULL
+	GAP_RegisterIndCbk(NULL, GAP_IND_USER_PASSKEY_REQUEST, hlp_gap_passkey_req_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_SIMPLE_PAIRING_COMPLETE, hlp_gap_ssp_complete_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_USER_PASSKEY_NOTIFICATION, hlp_gap_passkey_notify_ind);
+#endif
+	GAP_RegisterIndCbk(NULL, GAP_IND_USER_CONFIRMATION_REQUEST, hlp_gap_req_usr_cfm_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_CONNECTION_EVENT, hlp_gap_conn_event_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_CONNECTION_REQUEST, hlp_gap_conn_req_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_VENDOR_EVENT, hlp_gap_vendor_event_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_HARDWARE_ERROR_EVENT, hlp_gap_hardware_error_event_cbk);
+	GAP_RegisterIndCbk(NULL, GAP_IND_AUTHORIZATION_REQUEST, hlp_gap_authorize_request_cbk);
+	//GAP_IND_AUTHORIZATION_REQUEST
+
+	if (s_discovery_cb != NULL) {
+		while ((rmt_dev = List_RemoveHead(&s_discovery_cb->dev_list)) != NULL) {
+			LFREE(rmt_dev);
+		}
+
+		FREE_CRITICAL(s_discovery_cb->lock);
+		FREE(s_discovery_cb);
+	}
+
+	s_discovery_cb = (device_discovery_cb_t *) NEW(sizeof(device_discovery_cb_t));
+	memset(s_discovery_cb, 0, sizeof(device_discovery_cb_t));
+	s_discovery_cb->lock = CREATE_CRITICAL(NULL);
+
+	hlp_gap_set_status(ST_GAP_READY);
+	hlp_gap_tl_start();
+	s_current_acl_handle = 0xFFFF;
+}
+
+void hlp_gap_stop(void)
+{
+	bt_remote_device_t *rmt_dev;
+
+	//hlp_gap_set_scan_mode(0);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_link_key_notify_cbk);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_req_link_key_cbk);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_req_pin_code_cbk);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_authentication_failure_cbk);
+	/* BT2.1(BR/EDR) SSP */
+#ifdef GAP_IO_CAPABILITIES_FULL
+	GAP_UnregisterIndCbk(NULL, hlp_gap_passkey_req_cbk);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_passkey_notify_ind);
+#endif
+	GAP_UnregisterIndCbk(NULL, hlp_gap_req_usr_cfm_cbk);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_conn_event_cbk);
+	GAP_UnregisterIndCbk(NULL, hlp_gap_conn_req_cbk);
+
+	if (s_discovery_cb != NULL) {
+		while ((rmt_dev = List_RemoveHead(&s_discovery_cb->dev_list)) != NULL) {
+			LFREE(rmt_dev);
+		}
+
+		FREE_CRITICAL(s_discovery_cb->lock);
+		FREE(s_discovery_cb);
+		s_discovery_cb = NULL;
+	}
+	hlp_gap_set_status(ST_GAP_INIT);
+	hlp_gap_tl_stop();
+}
+
+void hlp_gap_done(void)
+{
+	vendor_interface_destroy(g_vendor_itf);
+	hlp_gap_tl_done();
+
+	if (s_gap_user_data != NULL) {
+		FREE(s_gap_user_data);
+		s_gap_user_data = NULL;
+	}
+}
+
+void hlp_gap_init_transport_layer(HANDLE hTLInst, TransportLayerStru *tl_funcs)
+{
+	GAP_RegisterTransportLayerA(hTLInst, tl_funcs, (GAP_RegisterTLCfmCbk *)hlp_gap_reg_tl_cfm_cbk);
+}
+
+void hlp_gap_destory_transport_layer(HANDLE tl_hdl, GAP_UnregisterTLCfmCbk *cfm_cbk)
+{
+	GAP_UnregisterTransportLayerA(tl_hdl, cfm_cbk);
+}
+
+void hlp_gap_excute_command(UINT32 op_index, void *context, void *in_par, UINT32 in_par_size)
+{
+	GAP_ExecuteCommandA(GAP_TL_HANDLE, context, op_index, in_par, in_par_size,(GAP_ExecuteCommandCfmCbk *)hlp_gap_excute_command_cbk);
+}
+
+void hlp_gap_excute_vendor_command(unsigned char nFlag, unsigned char ocf, void *param, unsigned char param_len)
+{
+	GAP_VendorCommandA(GAP_TL_HANDLE, (void *)(UINT32) (MAKEWORD(ocf,nFlag)), HCI_EVI_VENDOR, ocf, param, param_len, (GAP_VendorCommandCfmCbk *)hlp_gap_excute_vendor_cmd_cbk);
+}
+
+void hlp_gap_excute_vendor_no_return_command(unsigned char nFlag, unsigned char ocf, void *param, unsigned char param_len)
+{
+	GAP_VendorCommandA(GAP_TL_HANDLE, (void *)(MAKEWORD(ocf,nFlag)), 0xFF /* no return */, ocf, param, param_len, NULL);
+}
+
+void hlp_gap_reset_hardware(void)
+{
+	bse_log_info(TAG,"%s", __func__);
+	s_gap_user_data->init_state = BT_INIT_PROC_NULL;
+	on_init_state_changed(BT_INIT_PROC_BEGIN);
+}
+
+bt_remote_device_t* hlp_gap_find_paired_device(UINT8*bd)
+{
+	bt_remote_device_t * node = NULL;
+	if ((bd == NULL) || (s_discovery_cb == NULL))
+		return NULL;
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	node = LIST_FINDLENOFF0(&s_discovery_cb->dev_list, BD_ADDR_LEN, bd);
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	if(node != NULL)
+		return node;
+	return NULL;
+}
+
+void hlp_gap_load_paired_device(bt_remote_device_t * rmt_dev)
+{
+	bt_remote_device_t * find_dev;
+
+	if ((rmt_dev == NULL) || (s_discovery_cb == NULL))
+		return;
+
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	find_dev = LIST_FINDLENOFF0(&s_discovery_cb->dev_list, BD_ADDR_LEN, rmt_dev->bd);
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	if (find_dev == NULL) {
+		find_dev = List_NodeNew(sizeof(bt_remote_device_t));
+		if (find_dev != NULL) {
+			memcpy(find_dev, rmt_dev, sizeof(bt_remote_device_t));
+			ENTER_CRITICAL(s_discovery_cb->lock);
+			List_AddTail(&s_discovery_cb->dev_list, find_dev);
+			LEAVE_CRITICAL(s_discovery_cb->lock);
+		} else {
+			return;
+		}
+	}
+}
+
+void hlp_gap_set_visiability(int visable)
+{
+	int mode = visable ? GAP_VM_DEFAULT : GAP_VM_DISABLE;
+	GAP_SetVisualModeA(GAP_TL_HANDLE, (void *)mode, mode, hlp_gap_set_visibility_cbk);
+}
+
+void hlp_gap_set_local_device_class(UINT8 *p_class)
+{
+	struct HCI_Write_Class_of_DeviceStru cod_cmd;
+
+	memset(&cod_cmd, 0, sizeof(struct HCI_Write_Class_of_DeviceStru));
+
+	if (p_class != NULL) {
+		memcpy(cod_cmd.class_of_device, p_class, CLS_DEV_LEN);
+	}
+
+	hlp_gap_excute_command(HCI_OPS_WRITE_CLASS_OF_DEVICE, 0, &cod_cmd, sizeof(struct HCI_Write_Class_of_DeviceStru));
+}
+
+void hlp_gap_set_local_device_name(UINT8 *p_name)
+{
+	struct HCI_Write_Local_NameStru name_cmd;
+
+	memset(&name_cmd, 0, sizeof(struct HCI_Write_Local_NameStru));
+	if (p_name != NULL) {
+		memcpy(name_cmd.local_name, p_name, strlen(p_name));
+	}
+	hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+	hlp_gap_excute_command(HCI_OPS_WRITE_LOCAL_NAME, 0, &name_cmd, sizeof(struct HCI_Write_Local_NameStru));
+	hlp_gap_add_eir_uuid(p_name, strlen(p_name), HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME);
+	hlp_gap_write_eir();
+}
+
+void hlp_gap_set_bondable(UINT8 bondable)
+{
+	struct HCI_Security_LocalBondableStru *bond = (struct HCI_Security_LocalBondableStru *)NEW(sizeof(struct HCI_Security_LocalBondableStru));
+	bond->controller_id = HCI_AMPID_BREDR;
+	bond->bondable = bondable;
+	HCI_Security_SetBondable(bond);	//fixme, should use external FSM
+}
+
+void hlp_gap_set_ssp_mode(UINT8 mode)
+{
+	hlp_gap_excute_command(HCI_OPS_WRITE_SIMPLE_PAIRING_MODE, 0, &mode, sizeof(UINT8));
+}
+
+void hlp_gap_set_scan_mode(UINT8 mode)
+{
+	struct HCI_Write_Scan_EnableStru scan_cmd;
+	scan_cmd.scan_enable = mode;
+	hlp_gap_excute_command(HCI_OPS_WRITE_SCAN_ENABLE, (void *)(UINT32) mode, &scan_cmd, sizeof(struct HCI_Write_Scan_EnableStru));
+}
+
+static void hlp_gap_write_connection_timeout(UINT16 hdl)
+{
+    struct HCI_Write_Link_Supervision_TimeoutStru timeout_stru = {0};
+    timeout_stru.connection_handle = hdl;
+    timeout_stru.link_supervision_timeout = 4 * 1600;//8 * 1600
+    bse_log_api(TAG, "%s: hdl=0x%02x, timeout=%d", __FUNCTION__, hdl, 8);
+    hlp_gap_excute_command(HCI_OPS_WRITE_LINK_SUPERVISION_TIMEOUT, 0, &timeout_stru, sizeof(timeout_stru));
+}
+
+
+UINT8 hlp_gap_get_scan_mode(void)
+{
+	if (s_gap_user_data != NULL) {
+		hlp_gap_event_cbk(EV_APP_GAP_RET_SCAN_MODE, (void *)s_gap_user_data->s_mode);
+		return s_gap_user_data->s_mode;
+	}
+	return 0;
+}
+
+UINT8 hlp_gap_get_scan_mode_ex(void)
+{
+	if (s_gap_user_data != NULL) {
+		//hlp_gap_event_cbk(EV_APP_GAP_RET_SCAN_MODE, (UINT8)s_gap_user_data->s_mode);
+		return s_gap_user_data->s_mode;
+	}
+	return 0;
+}
+
+void hlp_gap_save_scan_mode(UINT8 scan_mode)
+{
+	if (s_gap_user_data != NULL) {
+		s_gap_user_data->s_mode = scan_mode;
+	}
+}
+
+void hlp_gap_set_authentication_enable(UINT8 mode)
+{
+	hlp_gap_excute_command(HCI_OPS_WRITE_AUTHENTICATION_ENABLE, (void *)(UINT32) mode, &mode, sizeof(UINT8));
+}
+
+void hlp_gap_set_device_other_attribute(void)
+{
+	bse_log_api(TAG, "hlp_gap_set_device_other_attribute %d\r\n", ssp_mode_x);
+
+	hlp_gap_set_bondable(1);
+#ifndef GAP_IO_CAPABILITIES_FULL
+	hlp_gap_set_ssp_mode(0);
+#else
+	printf("ssp_mode_x = %d\n", ssp_mode_x);
+	if(ssp_mode_x)
+		hlp_gap_set_ssp_mode(1);
+	else
+		hlp_gap_set_ssp_mode(0);
+#endif
+
+#ifdef CONFIG_INTERLACED_PAGE_SCAN
+	{
+		struct HCI_Write_Page_Scan_TypeStru page_scan_stru;
+		page_scan_stru.page_scan_type = HCI_PAGE_SCAN_TYPE_OPTIONAL_INTERLACED_SCAN;
+		GAP_ExecuteCommandA(NULL, NULL, HCI_OPS_WRITE_PAGE_SCAN_TYPE, &page_scan_stru, sizeof(struct HCI_Write_Page_Scan_TypeStru), NULL);
+	}
+#endif
+	hlp_gap_set_authentication_enable(0);
+#ifdef CONFIG_IAP
+	hlp_gap_add_carplay_uuid();
+#endif
+	hlp_gap_write_eir();
+#ifdef CONFIG_EC
+	if(sw_get_ble_connection_type() == BLE_EASY_CONNECTION) {
+		hlp_gap_register_gatt_ec_uuid();
+	}	
+#endif
+#ifdef CONFIG_EY
+	if(sw_get_ble_connection_type() == BLE_ERYA_CONNECTION) {
+		hlp_gap_register_gatt_ey_uuid();
+	}
+#endif
+#ifdef CONFIG_GATT
+	if(sw_get_ble_connection_type() == BLE_CLCAST_CONNECTION) {
+		hlp_gap_register_gatt_clcast_uuid();
+	}
+#endif
+}
+
+void hlp_gap_get_local_device_addr(void)
+{
+	hlp_gap_excute_command(HCI_OPS_READ_BD_ADDR, 0, NULL, 0);
+}
+
+
+void hlp_gap_get_remote_device_name(unsigned char *bd_addr)
+{
+	struct HCI_Remote_Name_RequestStru inp;
+	memset(&inp, 0, sizeof(struct HCI_Remote_Name_RequestStru));
+	memcpy(inp.bd, bd_addr, BD_ADDR_LEN);
+	inp.page_scan_repetition_mode = 2; /* Use R2 mode. */
+	hlp_gap_excute_command(HCI_OPS_REMOTE_NAME_REQUEST, 0, &inp, sizeof(struct HCI_Remote_Name_RequestStru));
+}
+
+void hlp_gap_get_connect_handle(UINT8 *bd, UINT16 *conn_hdl)
+{
+	struct HCI_AddressStru bd_stru;
+
+	bd_stru.cap = HCI_ADDRESS_CAP_BREDR;
+	bd_stru.atype = HCI_OWN_ADDRESS_TYPE_PUBLIC_DEVICE_ADDRESS;
+	memcpy(bd_stru.bd, bd, BD_ADDR_LEN);
+
+	GAP_GetConnHandle(NULL, &bd_stru, GAP_LINK_TYPE_BREDR, conn_hdl);
+}
+
+void hlp_gap_reg_tl_cfm_cbk(HANDLE tl_handle, UINT8 result, struct GAP_RegisterTLCfmStru *cfm_par)
+{
+	if(result == HCI_STATUS_OK) {
+		GAP_TL_HANDLE = tl_handle;
+	}
+}
+
+static int s_reset_tries = 2;
+
+static void hlp_gap_on_post_reset_finished(BOOL result)
+{
+	//UINT8 *cod = NULL;
+
+	hlp_gap_event_cbk(EV_APP_GAP_RET_HARDWARE_DATA, g_vendor_itf->vendor_get_device_info());
+
+	on_init_state_changed(BT_INIT_PROC_RESET);
+}
+
+static void hlp_gap_vendor_itf_callback(UINT8 event, void *param)
+{
+	switch (event) {
+	case VENDOR_EV_MIC_GAIN:
+		hlp_gap_event_cbk(EV_APP_GAP_RET_MIC_GAIN, param);
+		break;
+	case VENDOR_EV_POST_RESET_HARDWARE_FINISHED:
+		hlp_gap_on_post_reset_finished((BOOL) param);
+		break;
+	case VENDOR_EV_AUDIO_PARAMETER_UPDATED:
+		// FIXME do NOT call AT layer directly!
+		bt_event_indicate(BT_EV_WRITE_E2_COMPLETE, param);
+		break;
+	}
+}
+
+void hlp_gap_reset_hardware_cbk(void *context, UINT8 result, void *cfm_par)
+{
+	if (hlp_gap_get_status() < ST_GAP_READY) {
+		bse_log_error(TAG, "hlp_gap_reset_hardware_cbk, gap state=%d\r\n", hlp_gap_get_status());
+		return;
+	}
+
+	if(result == HCI_STATUS_OK) {
+		bse_log_api(TAG, "hlp_gap_reset_hardware_cbk, ok\r\n");
+		g_vendor_itf->vendor_post_reset();
+		bse_log_api(TAG, "hlp_gap_reset_hardware_cbk, end\r\n");
+	} else if (s_reset_tries-- > 0) {
+		bse_log_error(TAG, "hlp_gap_reset_hardware_cbk, reset failed, retry %d\r\n", s_reset_tries);
+		hlp_gap_reset_hardware();
+	}
+}
+
+static void hlp_gap_set_visibility_cbk(void *context, UINT16 result, void *cfm_par)
+{
+	int mode = (int) context;
+	if (result == HCI_STATUS_OK) {
+		if (mode == GAP_VM_DISABLE) { // command to set local invisible. From bt_disable_bluetooth
+			bse_log_info(TAG,  "%s - set local device invisiable successfully.", __FUNCTION__);
+		}
+	}
+}
+
+tGAP_IndCbk_Result hlp_gap_req_pin_code_cbk(HANDLE tl_handle, void *context
+        , tGAP_Ind_Type ind_type
+        , void *par, UINT32 size)
+{
+	bt_remote_device_t dev;
+#ifndef GAP_USE_INPUT_PINCODE
+	struct gap_req_data_stru req_data;
+	struct HCI_PIN_Code_Request_ReplyStru reply;
+
+	memset(&req_data, 0, sizeof(struct gap_req_data_stru));
+	memset(&reply, 0, sizeof(struct HCI_PIN_Code_Request_ReplyStru));
+	memcpy(reply.bd, ((struct HCI_PIN_Code_RequestEvStru *)par)->bd, BD_ADDR_LEN);
+
+	hlp_gap_event_cbk(EV_APP_GAP_REQ_PINCODE, &req_data);
+	if (req_data.p_ret_data != NULL) {
+		reply.pin_code_len = strlen(req_data.p_ret_data);
+		memcpy(reply.pin_code, req_data.p_ret_data, reply.pin_code_len);
+		hlp_gap_excute_command(HCI_OPS_PIN_CODE_REQUEST_REPLY, 0, &reply, sizeof(struct HCI_PIN_Code_Request_ReplyStru));
+	}
+#else // Notify App
+	hlp_gap_event_cbk(EV_APP_GAP_PINCODE_REQ, ((struct HCI_PIN_Code_RequestEvStru *)par)->bd);
+#endif
+	// Notify bond state changed
+	memcpy(dev.bd, ((struct HCI_PIN_Code_RequestEvStru *)par)->bd, BD_ADDR_LEN);
+	dev.bond_state = ST_BOND_BONDING;
+	hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+
+	return GAP_IND_RESULT_PENDING;
+}
+
+tGAP_IndCbk_Result hlp_gap_authentication_failure_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	struct GAP_AuthenticationFailureStru * failureStru = (struct GAP_AuthenticationFailureStru *) par;
+	bt_remote_device_t dev;
+	UINT8 *bd_addr;
+
+	if (failureStru != NULL) {
+		bd_addr = failureStru->addr.bd;
+		if (bd_addr != NULL) {
+			memcpy(dev.bd, bd_addr, BD_ADDR_LEN);
+			dev.bond_state = ST_BOND_NONE;
+			hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+		}
+
+		bse_log_info(TAG, "%s err is 0x%x\r\n", __func__, failureStru->error);
+		if(failureStru->error == HCI_STATUS_AUTHENTICATION_FAILURE) {
+			hlp_gap_event_cbk(EV_APP_GAP_AUTHENTICATION_FAILURE, &(failureStru->addr));
+		} else if (failureStru->error == HCI_STATUS_PIN_OR_KEY_MISSING) {
+			hlp_gap_event_cbk(EV_APP_GAP_PIN_OR_KEY_MISSING, &(failureStru->addr));
+		}
+	}
+	return GAP_IND_RESULT_PENDING;
+}
+
+/* the function to deal with ssp failed
+ * warning: the function just to deal with
+ * ssp failed
+ */
+#ifdef GAP_IO_CAPABILITIES_FULL
+static tGAP_IndCbk_Result hlp_gap_ssp_complete_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	struct HCI_Simple_Pairing_CompleteEvStru * ssp_stru = (struct HCI_Simple_Pairing_CompleteEvStru*) par;
+	bt_remote_device_t dev;
+	UINT8 *bd_addr;
+	struct HCI_AddressStru addr;
+
+	memset(&addr, 0, sizeof(struct HCI_AddressStru));
+
+	if (ssp_stru != NULL) {
+		if (ssp_stru->status == 0) /* ssp success */
+			return GAP_IND_RESULT_PENDING;
+
+		bd_addr = ssp_stru->bd;
+		if (bd_addr != NULL) {
+			memcpy(dev.bd, bd_addr, BD_ADDR_LEN);
+			dev.bond_state = ST_BOND_NONE;
+			hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+
+			memcpy(addr.bd, bd_addr, BD_ADDR_LEN);
+		}
+
+		bse_log_info(TAG, "Pin or Key Missing\r\n");
+		hlp_gap_event_cbk(EV_APP_GAP_PIN_OR_KEY_MISSING, &addr);
+	}
+
+	return GAP_IND_RESULT_PENDING;
+}
+#endif
+
+void hlp_gap_bond_pair_event(bt_remote_device_t *dev)
+{
+	//printf("hlp_gap_bond_pair_event start\n");
+	//printf("name = %s\n", dev.name);
+	hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, dev);
+}
+
+tGAP_IndCbk_Result hlp_gap_req_link_key_cbk(HANDLE tl_handle, void *context
+        , tGAP_Ind_Type ind_type
+        , void *par, UINT32 size)
+{
+	struct gap_req_data_stru req_data;
+	struct HCI_Security_Link_Key_Request_ReplyStru reply;
+	bt_remote_device_t dev;
+
+	memset(&req_data, 0, sizeof(struct gap_req_data_stru));
+	memset(&reply, 0, sizeof(struct HCI_Security_Link_Key_Request_ReplyStru));
+	memcpy(reply.bd, ((struct HCI_Security_Link_Key_Ask4Stru *)par)->remote_bd, BD_ADDR_LEN);
+
+	req_data.p_reference = reply.bd;
+	hlp_gap_event_cbk(EV_APP_GAP_REQ_LINK_KEY, &req_data);
+	if (req_data.p_ret_data != NULL) {
+		reply.accept = TRUE;
+		memcpy(reply.link_key, req_data.p_ret_data, LINK_KEY_LEN);
+	} else {
+		reply.accept = FALSE;
+	}
+	memcpy(dev.bd, reply.bd, 6);
+	dev.bond_state = ST_BOND_BONDED;
+	hlp_gap_bond_pair_event(&dev);
+
+	GAP_LinkKeyReply(GAP_TL_HANDLE, &reply);
+	return GAP_IND_RESULT_PENDING;
+}
+
+static void bonded_state_changed_delay_cb(void * arg)
+{
+	bt_remote_device_t *dev = (bt_remote_device_t *) arg;
+
+	if (dev != NULL) {
+		dev->bond_state = ST_BOND_BONDED;
+		hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, dev);
+		FREE(dev);
+	}
+
+}
+
+tGAP_IndCbk_Result hlp_gap_link_key_notify_cbk(HANDLE tl_handle, void *context,
+        tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	struct HCI_Security_Link_Key_SaveStru * saveStru = (struct HCI_Security_Link_Key_SaveStru *) par;
+	bt_remote_device_t dev;
+	bt_remote_device_t *find_dev;
+	int len;
+
+	if (saveStru == NULL) {
+		return GAP_IND_RESULT_ACCEPT;
+	}
+
+	bse_log_api(TAG,  "hlp_gap_link_key_notify_cbk([%02X:%02X:%02X:%02X:%02X:%02X]).link_key([%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X])",
+	            saveStru->remote_bd[0],
+	            saveStru->remote_bd[1],
+	            saveStru->remote_bd[2],
+	            saveStru->remote_bd[3],
+	            saveStru->remote_bd[4],
+	            saveStru->remote_bd[5],
+	            saveStru->link_key[15],
+	            saveStru->link_key[14],
+	            saveStru->link_key[13],
+	            saveStru->link_key[12],
+	            saveStru->link_key[11],
+	            saveStru->link_key[10],
+	            saveStru->link_key[9],
+	            saveStru->link_key[8],
+	            saveStru->link_key[7],
+	            saveStru->link_key[6],
+	            saveStru->link_key[5],
+	            saveStru->link_key[4],
+	            saveStru->link_key[3],
+	            saveStru->link_key[2],
+	            saveStru->link_key[1],
+	            saveStru->link_key[0]);
+
+	// patch for bond failed
+	if (s_bonding_timer != NULL) {
+		FSM_DelTimer(&s_bonding_timer);
+		s_bonding_timer = NULL;
+	}
+
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	find_dev = LIST_FINDLENOFF0(&s_discovery_cb->dev_list, BD_ADDR_LEN, saveStru->remote_bd);
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	if (find_dev == NULL) {
+		find_dev = List_NodeNew(sizeof(bt_remote_device_t));
+		if (find_dev != NULL) {
+			memcpy(find_dev->bd, saveStru->remote_bd, BD_ADDR_LEN);
+			find_dev->reconn_profile = 0;
+			ENTER_CRITICAL(s_discovery_cb->lock);
+			List_AddTail(&s_discovery_cb->dev_list, find_dev);
+			LEAVE_CRITICAL(s_discovery_cb->lock);
+			//hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_FOUND, find_dev);
+		} else {
+			return GAP_IND_RESULT_ACCEPT;
+		}
+	}
+
+	memcpy(find_dev->link_key, saveStru->link_key, LINK_KEY_LEN);
+	hlp_gap_event_cbk(EV_APP_GAP_RET_LINK_KEY, find_dev);
+
+#ifdef PATCH_RECONN
+	if(pr_is_connect_by_app()) {
+		pr_set_reconn_mgr(PR_CONN_PAIR_SUCC);
+	}
+#endif
+	// Normally the previous bond state should be ST_BOND_BONDING.
+	// If not so, It indicates that some bond initiating-procedure is not detected, we simulate
+	// a bonding event here.
+	if (find_dev->bond_state != ST_BOND_BONDING) {
+		bt_remote_device_t *dev = NEW(sizeof(bt_remote_device_t));
+
+		bse_log_info(TAG,  "hlp_gap_link_key_notify_cbk, device is bonded but previous state is %d.", find_dev->bond_state);
+		//find_dev->bond_state = ST_BOND_BONDED;
+		//hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, find_dev);
+		// delay 500 ms to broadcast the event of bonded state
+
+		if (dev) {
+			memcpy(dev, find_dev, sizeof(bt_remote_device_t));
+			FsmAddTimer(NULL, 500, 0, dev, NULL, (UINT32) bonded_state_changed_delay_cb);
+		}
+	} else {
+		find_dev->bond_state = ST_BOND_BONDED;
+		hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, find_dev);
+	}
+
+	on_remote_device_bonded(saveStru->remote_bd);
+
+	if (find_dev->name[0] == '\0') {
+		hlp_gap_get_remote_device_name(find_dev->bd);
+	}
+
+	return GAP_IND_RESULT_ACCEPT;
+}
+
+tGAP_IndCbk_Result hlp_gap_req_usr_cfm_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type
+        , void *par, UINT32 size)
+{
+	bt_remote_device_t dev;
+	struct HCI_User_Confirmation_RequestEvStru *cfmStru = (struct HCI_User_Confirmation_RequestEvStru *) par;
+#ifndef GAP_IO_CAPABILITIES_FULL
+	struct HCI_User_Confirmation_Request_ReplyStru reply;
+	memcpy(reply.bd, cfmStru->bd, BD_ADDR_LEN);
+	GAP_ExecuteCommandA(NULL, NULL, HCI_OPS_USER_CONFIRMATION_REQUEST_REPLY, &reply,
+	                    sizeof(struct HCI_User_Confirmation_Request_ReplyStru), NULL);
+#else
+#if defined GAP_USER_OPERATE
+	app_gap_user_confirmation(cfmStru->bd, 1);
+#else
+	//hlp_gap_event_cbk(EV_APP_GAP_USER_CONFIRMATION, par);
+#endif
+
+#endif
+printf("----------------------------------------------------user_accq------------------------------------%d\n", user_accq);
+	if(user_accq)
+	{
+		app_gap_user_confirmation(cfmStru->bd, 1);
+	}else{
+		hlp_gap_event_cbk(EV_APP_GAP_USER_CONFIRMATION, par);
+	}
+	bse_log_api(TAG,  "hlp_gap_req_usr_cfm_cbk([%02X:%02X:%02X:%02X:%02X:%02X]).",
+	            cfmStru->bd[0],
+	            cfmStru->bd[1],
+	            cfmStru->bd[2],
+	            cfmStru->bd[3],
+	            cfmStru->bd[4],
+	            cfmStru->bd[5]);
+    //zhonghong send GPF with AG device name
+    hlp_gap_get_remote_device_name(cfmStru->bd);
+
+	memcpy(dev.bd, cfmStru->bd, BD_ADDR_LEN);
+	dev.bond_state = ST_BOND_BONDING;
+	hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+
+	return GAP_IND_RESULT_PENDING;
+}
+
+tGAP_IndCbk_Result hlp_gap_conn_event_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type
+        , void *par, UINT32 size)
+{
+	struct GAP_ConnectionEventStru *conn_event = (struct GAP_ConnectionEventStru *)par;
+	bse_log_api(TAG,  "hlp_gap_conn_event_cbk:%d,%d,%02x", conn_event->connected, conn_event->link_type, conn_event->reason);
+
+	if(conn_event->link_type == GAP_LINK_TYPE_LE) {
+		return GAP_IND_RESULT_NOT_CARE;
+	}
+
+	if(par && (conn_event->connected == FALSE) && (conn_event->link_type == GAP_LINK_TYPE_BREDR)) {
+		if (conn_event->reason == HCI_STATUS_PAGE_TIMEOUT) {
+			//TODO
+		} else if (conn_event->reason == HCI_STATUS_AUTHENTICATION_FAILURE) {
+			bt_remote_device_t dev;
+
+			FSM_DelTimer(&s_bonding_timer);
+			s_bonding_timer = NULL;
+
+			if (conn_event->addr.bd != NULL) {
+				memcpy(dev.bd, conn_event->addr.bd, BD_ADDR_LEN);
+				dev.bond_state = ST_BOND_NONE;
+
+				hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+			}
+
+		} else if (conn_event->reason == HCI_STATUS_CONNECTION_TIMEOUT) {
+			if (conn_event->addr.bd != NULL) {
+				hlp_gap_event_cbk(EV_APP_GAP_CONNECTION_DISCONNECTED, conn_event);
+				hlp_gap_event_cbk(EV_APP_GAP_LINK_LOST, NULL);
+			}
+		}
+
+#ifdef PATCH_RECONN
+		if(conn_event->reason == HCI_STATUS_REMOTE_USER_TERMINATED_CONNECTION) {
+			if((pr_is_connect_by_app() && pr_is_conn_pair_succ()) || pr_is_conn_by_remote()) {
+				if(pr_is_hfp_conn_failed() || pr_is_conn_by_remote()) {
+					bse_log_info(TAG, "hly####hfp has connect failed");
+					UCHAR *bd = NEW(6);
+					memcpy(bd, conn_event->addr.bd, 6);
+					FsmAddTimer(NULL, 1000, 0, bd, NULL, (UINT32)patch_reconn);
+				} else {
+					pr_set_reconn_mgr(PR_ACL_DISCONNECT_REM);
+				}
+			} else {
+				pr_clear_reconn_mgr();
+			}
+		} else {
+			pr_clear_reconn_mgr();
+		}
+#endif
+		if (conn_event->acl_hdl == s_current_acl_handle) {
+			s_current_acl_handle = 0xFFFF;
+		}
+		/*hlp_gap_set_scan_mode(3);
+		hlp_gap_set_scan_mode(3);
+		hlp_gap_set_scan_mode(3);*/
+		
+		//app_gap_scan_mode_control(BT_SET_SCAN_MODE_TYPE_RECOVER, TRUE);
+
+		//bse_log_api(TAG, "hlp_gap_excute_command HCI_OPS_RESET %d\n", 2);
+		//hlp_gap_excute_command(HCI_OPS_RESET, NULL, NULL, 0);
+		//sleep(1);
+
+		//hlp_hf_set_status(ST_HF_READY);
+		struct connected_info_t event_hfp_discon;
+		memcpy(event_hfp_discon.bd, conn_event->addr.bd, 6);
+		event_hfp_discon.outgoing = 0;
+/* zjg modify
+		if(hlp_pbap_get_status() >= ST_PBAP_CONNECTING)
+		{
+			hlp_pbap_set_status(ST_PBAP_READY);
+		}
+
+		if(hlp_hf_get_status() > ST_HF_READY)
+		{
+			hlp_hf_set_status(ST_HF_READY);
+		}
+
+		bt_event_indicate(BT_EV_HF_DISCONNECTED, (void *)&event_hfp_discon);
+*/
+		extern BOOL g_bt_opened;
+		if(g_bt_opened)
+			app_gap_scan_mode_control(BT_SET_SCAN_MODE_TYPE_RECOVER, TRUE);
+
+		//app_gap_reset_hardware();
+	}
+
+	if (par && (conn_event->connected == TRUE)) {
+
+		if (app_gap_is_discovering() == TRUE) {
+			app_gap_cancel_discovery();
+		}
+
+		if(s_current_acl_handle != 0xFFFF)
+		{
+			bse_log_api(TAG,  "hlp_gap_conn_event_cbk s_current_acl_handle = %04x", s_current_acl_handle);
+			struct HCI_DisconnectStru pard;
+			pard.connection_handle = conn_event->acl_hdl;
+			pard.reason = HCI_STATUS_REMOTE_USER_TERMINATED_CONNECTION;
+			hlp_gap_excute_command(HCI_OPS_DISCONNECT, 0, &pard, sizeof(struct HCI_DisconnectStru));
+			return GAP_IND_RESULT_NOT_CARE;
+		}
+
+		s_current_acl_handle = conn_event->acl_hdl;
+
+		//printf("hlp_gap_conn_event_cbk hlp_gap_get_remote_device_name\n");
+		hlp_gap_get_remote_device_name(conn_event->addr.bd);
+		hlp_hf_set_status(ST_HF_CONNECTING);
+		event_hf_indication(EV_HF_CONNECTING, conn_event->addr.bd);
+
+		hlp_gap_write_connection_timeout(conn_event->acl_hdl);
+
+	}
+	return GAP_IND_RESULT_NOT_CARE;
+}
+
+tGAP_IndCbk_Result hlp_gap_conn_req_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type
+                                        , void *par, UINT32 size)
+{
+	struct HCI_Connection_RequestEvStru *conn_req = (struct HCI_Connection_RequestEvStru *) par;
+	bt_remote_device_t *find_dev;
+	int len;
+	UINT8 *cod;
+	UINT32 class_of_device;
+
+	if (conn_req == NULL) {
+		return GAP_IND_RESULT_NOT_CARE;
+	}
+
+	cod = conn_req->class_of_device;
+	class_of_device = (((UINT32) cod[2] << 16) + ((UINT32) cod[1] << 8) + cod[0]);
+
+	bse_log_api(TAG,  "remote device[%02X:%02X:%02X:%02X:%02X:%02X],COD[0x%08X] request connection.",
+	            conn_req->bd[0], conn_req->bd[1], conn_req->bd[2], conn_req->bd[3], conn_req->bd[4], conn_req->bd[5],
+	            class_of_device);
+#ifdef PATCH_RECONN
+	pr_set_reconn_mgr(PR_CONNECT_BY_REMOTE);// patch for iphone
+#endif
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	find_dev = LIST_FINDLENOFF0(&s_discovery_cb->dev_list, BD_ADDR_LEN, conn_req->bd);
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	if (find_dev != NULL) {
+		find_dev->class_of_device = class_of_device;
+	} else {
+		find_dev = List_NodeNew(sizeof(bt_remote_device_t));
+		memcpy(find_dev->bd, conn_req->bd, BD_ADDR_LEN);
+		find_dev->class_of_device = class_of_device;
+		ENTER_CRITICAL(s_discovery_cb->lock);
+		List_AddTail(&s_discovery_cb->dev_list, find_dev);
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+		//hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_FOUND, find_dev);
+	}
+	bse_log_api(TAG,  "hlp_gap_conn_req_cbk conn_req->link_type = %04x hlp_hf_get_status() = %d", conn_req->link_type, hlp_hf_get_status());
+	if (bt_bluetooth_is_disabling() || (conn_req->link_type == 0x02 && hlp_hf_get_status() == ST_HF_DISCONNECTING)) {
+		return GAP_IND_RESULT_REJECT;
+	}
+
+	if(s_current_acl_handle != 0xFFFF && (conn_req->link_type == 0x01))
+	{
+		bse_log_api(TAG,  "hlp_gap_conn_req_cbk s_current_acl_handle = %04x", s_current_acl_handle);
+		return GAP_IND_RESULT_PENDING;
+	}
+
+	return GAP_IND_RESULT_NOT_CARE;
+}
+
+void hlp_gap_excute_command_cbk(void *context, UINT8 result, struct GAP_ExecuteCommandCfmStru *cfm_par)
+{
+	struct gap_req_data_stru req_data;
+	struct HCI_PIN_Code_Request_ReplyCompStru *reply_cmpl;
+	switch(cfm_par->opindex) {
+	case HCI_OPS_WRITE_CLASS_OF_DEVICE:
+		//if(result == HCI_STATUS_OK) {  //Fix me,command fail sometimes
+		on_init_state_changed(BT_INIT_PROC_SET_COD);
+		//}
+		break;
+	case HCI_OPS_WRITE_LOCAL_NAME:
+		//if(result == HCI_STATUS_OK)	{//Fix me,command fail sometimes
+		on_init_state_changed(BT_INIT_PROC_SET_LOC_NAME);
+		//hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+		//}
+		hlp_manager_query_local_device_name();
+		break;
+	case HCI_OPS_PIN_CODE_REQUEST_REPLY:
+		if(result == HCI_STATUS_OK) {
+			bse_log_info(TAG, "FSM:PinCod Reply OK\r\n");
+		}
+		if (cfm_par != NULL) {
+			reply_cmpl = (struct HCI_PIN_Code_Request_ReplyCompStru *) cfm_par->event_parameter;
+			hlp_guard_bonding_result(reply_cmpl->bd);
+		}
+		break;
+	case HCI_OPS_PIN_CODE_REQUEST_NEGATIVE_REPLY:
+		break;
+	case HCI_OPS_WRITE_SCAN_ENABLE:
+		if(result == HCI_STATUS_OK) {
+			UINT8 mode = (UINT8)(UINT32) context;
+			bse_log_info(TAG, "FSM:Write scan enable OK: %d\r\n", mode);
+			switch(mode) {
+			case BT_GAP_SCAN_MODE_DISABLE|BT_GAP_PARITY_MODE_DISABLE:
+				break;
+			case BT_GAP_SCAN_MODE_ENABLE|BT_GAP_PARITY_MODE_DISABLE:		 //Set Pariable
+				break;
+			case BT_GAP_SCAN_MODE_DISABLE|BT_GAP_PARITY_MODE_ENABLE:		//Set Inquiry Scan disabled
+				break;
+			case BT_GAP_SCAN_MODE_ENABLE|BT_GAP_PARITY_MODE_ENABLE:	     //Set Enable
+				break;
+			}
+
+			//hlp_gap_event_cbk(EV_APP_GAP_RET_SCAN_MODE, (void *)(UINT32) mode);
+			//hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+		}
+		break;
+	case HCI_OPS_READ_BD_ADDR: {
+		struct HCI_Read_BD_ADDRCompStru *bd_ev = (struct HCI_Read_BD_ADDRCompStru *)cfm_par->event_parameter;
+
+		if (bd_ev != NULL) {
+			hlp_gap_event_cbk(EV_APP_GAP_RET_LOCAL_BD, bd_ev->bd);
+		}
+		on_init_state_changed(BT_INIT_PROC_GET_LOC_ADDR);
+	}
+	break;
+	case HCI_OPS_REMOTE_NAME_REQUEST: {
+		bt_remote_device_t * rmt_dev = NULL;
+		int name_len;
+		struct HCI_Remote_Name_Request_CompleteEvStru * outp;
+
+		if((cfm_par != NULL) && (cfm_par->event_parameter != NULL)) {
+			hlp_gap_event_cbk(EV_APP_GAP_RET_AG_DEVICE_NAME, cfm_par->event_parameter);
+
+			outp = (struct HCI_Remote_Name_Request_CompleteEvStru *)cfm_par->event_parameter;
+			name_len = strlen(outp->remote_name);
+			name_len = name_len > DEV_NAME_LEN ? DEV_NAME_LEN : name_len;
+
+			ENTER_CRITICAL(s_discovery_cb->lock);
+			rmt_dev = (bt_remote_device_t *)LIST_FINDLENOFF0(&s_discovery_cb->dev_list, BD_ADDR_LEN, (UINT8 *)outp->bd );
+			LEAVE_CRITICAL(s_discovery_cb->lock);
+
+			if (rmt_dev == NULL) {
+				rmt_dev = (bt_remote_device_t *)List_NodeNew(sizeof(bt_remote_device_t));
+				memset(rmt_dev, 0, sizeof(bt_remote_device_t));
+				memcpy(rmt_dev->bd, outp->bd, BD_ADDR_LEN);
+				ENTER_CRITICAL(s_discovery_cb->lock);
+				List_AddTail(&s_discovery_cb->dev_list, rmt_dev);
+				LEAVE_CRITICAL(s_discovery_cb->lock);
+			} else {
+				memset(rmt_dev->name, 0, sizeof(rmt_dev->name));
+			}
+			utf8_strncpy(rmt_dev->name, outp->remote_name, name_len);
+
+			hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_UPDATED, rmt_dev);
+		}
+	}
+	break;
+	case HCI_OPS_QOS_SETUP: {
+	}
+	break;
+	case HCI_OPS_DISCONNECT: {
+		struct HCI_Disconnection_CompleteEvStru *compl =
+		    (struct HCI_Disconnection_CompleteEvStru*) cfm_par->event_parameter;
+
+		if (compl != NULL) {
+			bse_log_info(TAG,  "GAP disconnect ACL completed. status:0x%x, reason:0x%x.",
+			             compl->status, compl->reason);
+			hlp_gap_event_cbk(EV_APP_GAP_ACL_DISCONNECTED, NULL);
+		}
+	}
+	break;
+	default:
+		break;
+	}
+}
+
+void hlp_gap_excute_vendor_cmd_cbk(void *context, UINT8 result, void *cfm_par)
+{
+	g_vendor_itf->vendor_cmd_cbk(context, result, cfm_par);
+}
+
+void hlp_gap_set_status(UINT8 status)
+{
+	bse_log_info(TAG,"%s type = %d", __func__, status);
+	GAP_STATE = status;
+}
+
+UINT8 hlp_gap_get_status(void)
+{
+	if (s_gap_user_data != NULL) {
+		return GAP_STATE;
+	} else {
+		return ST_GAP_UNINIT;
+	}
+}
+
+
+//discorvey
+
+void app_gap_register_discovery_callback(bt_discovery_callback cb)
+{
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	if (s_discovery_cb) {
+		s_discovery_cb->evt_cb = cb;
+	}
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+}
+
+void app_gap_unregister_discovery_callback(bt_discovery_callback cb)
+{
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	if (s_discovery_cb) {
+		s_discovery_cb->evt_cb = NULL;
+	}
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+}
+
+void app_gap_start_discovery(int time_len, char type)
+{
+	bse_log_info(TAG,"%s type = %d", __func__, type);
+	UINT16 res;
+	UINT8 state;
+	struct GAP_DeviceDiscoveryReqStru req;
+	bt_remote_device_t *rmt_dev;
+
+	if (!s_discovery_cb) {
+		return;
+	}
+
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	state = s_discovery_cb->discovery_state;
+	// previous cancel_discovery operation has not completed.
+	if (state == ST_DISCOVERY_CANCELLING) {
+		s_discovery_cb->discovery_state = ST_DISCOVERY_WAIT;
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+		return;
+	} else if (state != ST_DISCOVERY_DONE) {
+		bse_log_info(TAG,  "start discovery in %s state, return.",
+		             (state == ST_DISCOVERY_ONGOING ? "ONGOING" : "WAIT"));
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+		return;
+	}
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	reset_dev_list();
+	//req.flag = GAP_DEVICE_DISCOVERY_BREDR | GAP_DEVICE_DISCOVERY_NAME_REQUIRED;
+	if(type == 1)
+		req.flag = GAP_DEVICE_DISCOVERY_BREDR | GAP_DEVICE_DISCOVERY_NAME_REQUIRED;
+	else if(type == 2)
+		req.flag = GAP_DEVICE_DISCOVERY_LE | GAP_DEVICE_DISCOVERY_NAME_REQUIRED;
+	else if(type == 3)
+		req.flag = GAP_DEVICE_DISCOVERY_LE | GAP_DEVICE_DISCOVERY_BREDR | GAP_DEVICE_DISCOVERY_NAME_REQUIRED;
+
+	bse_log_info(TAG,"%s req.flag = %d", __func__, req.flag);
+#ifdef CONFIG_BT_CHIP_ISSC //Use to control the controller died when controller is inquiring.
+	req.inquiry_len = 8;
+	req.num_responses = 10;
+#else
+	req.inquiry_len = 12;
+	req.num_responses = 0;
+#endif
+
+	GAP_RegisterIndCbk(s_discovery_cb, GAP_IND_INQUIRY_RESULT, on_remote_device_found);
+	GAP_RegisterIndCbk(s_discovery_cb, GAP_IND_REMOTE_DEVICE_NAME_UPDATED, on_remote_device_name_updated);
+	res = GAP_DeviceDiscovery(NULL, s_discovery_cb, &req, on_device_discovery_finished);
+	if (res == HCI_STATUS_OK) {
+		ENTER_CRITICAL(s_discovery_cb->lock);
+		s_discovery_cb->discovery_state = ST_DISCOVERY_ONGOING;
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+		hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_STARTED, NULL);
+	} else {
+		hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_FINISHED, 0);
+	}
+
+}
+
+void app_gap_cancel_discovery()
+{
+	ENTER_CRITICAL(s_discovery_cb->lock);
+
+	if (s_discovery_cb->discovery_state == ST_DISCOVERY_ONGOING) {
+		s_discovery_cb->discovery_state = ST_DISCOVERY_CANCELLING;
+	} else {
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+		return;
+	}
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	GAP_CancelDeviceDiscovery(NULL, on_device_discovery_finished);
+}
+
+UINT8 app_gap_is_discovering()
+{
+	return s_discovery_cb->discovery_state != ST_DISCOVERY_DONE;
+}
+
+static void on_device_discovery_finished(void *context, UINT16 result, struct GAP_DeviceDiscoveryCfmStru *cfm)
+{
+	device_discovery_cb_t *pcb = (device_discovery_cb_t *) context;
+	bt_bonded_device_t *bond_dev;
+	bt_remote_device_t *rmt_dev;
+	UINT8 prev_state;
+
+	bse_log_api(TAG,  "GAP on_device_discovery_finished. result:0x%x.", result);
+	hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_FINISHED, (void *)(UINT32) result);
+	GAP_UnregisterIndCbk(NULL, on_remote_device_found);
+	GAP_UnregisterIndCbk(NULL, on_remote_device_name_updated);
+
+	if (s_discovery_cb != NULL) {
+		ENTER_CRITICAL(s_discovery_cb->lock);
+		//add for memory add
+		List_RemoveAll(&pcb->dev_list);
+		prev_state = s_discovery_cb->discovery_state;
+		s_discovery_cb->discovery_state = ST_DISCOVERY_DONE;
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+
+		if (prev_state == ST_DISCOVERY_WAIT) {
+			app_gap_start_discovery(0, 1);
+		}
+	}
+}
+
+static UINT8 hlp_gap_get_carplay_service(UINT8 * eir_data, unsigned short eir_len)
+{
+	int i = 0;
+	int len = 0;
+	int data_type = 0;
+	int uuid_len = 16;
+	UINT8 carplay_uuid[16] = {0x1A, 0x29, 0xEA, 0xAB, 0x01, 0x73, 0xBC, 0x88, 0x1C, 0x45, 0x4D, 0xE1, 0x66, 0x24, 0x8D, 0x2D};
+
+	if((eir_data == NULL) || (eir_len == 0))
+	{
+		return 0;
+	}
+
+	while(i < eir_len)
+	{
+		len = eir_data[i];
+		if (len > 0)
+		{
+			i++; //service type
+			data_type = eir_data[i];
+			if ((data_type == HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS) && \
+					                                                                 (len == 0x21))
+			{		
+				if (!memcmp(carplay_uuid, (eir_data+i+17), uuid_len))
+				{
+					return 1; //support carplay service
+				}
+			}
+			i += len;
+		}
+	}
+
+	return 0;
+}
+/*
+static tGAP_IndCbk_Result on_remote_device_found(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct GAP_RemoteDeviceInfoStru *src_dev, UINT32 size)
+{
+	bt_remote_device_t *rmt_dev;
+	device_discovery_cb_t * pcb;
+	UINT16 len = 0;
+	UINT16 i = 0;
+	UINT8 carplay = 0;
+
+	if (!context) return GAP_IND_RESULT_NOT_CARE;
+
+	pcb = (device_discovery_cb_t *) context;
+	ENTER_CRITICAL(pcb->lock);
+	rmt_dev = pcb->dev_list.head;
+
+	while ((rmt_dev != NULL) && (memcmp(rmt_dev->bd, src_dev->addr.bd, 6) ||
+	                             !(src_dev->addr.cap & HCI_ADDRESS_CAP_BREDR))) { //Ignore BLE single mode device
+		rmt_dev = LNEXT(rmt_dev);
+	}
+	LEAVE_CRITICAL(pcb->lock);
+
+	if (rmt_dev == NULL) {
+		rmt_dev = List_NodeNew(sizeof(bt_remote_device_t));
+		if (rmt_dev == NULL) {
+			return GAP_IND_RESULT_NOT_CARE;
+		}
+		memcpy(rmt_dev->bd, src_dev->addr.bd, BD_ADDR_LEN);
+
+		ENTER_CRITICAL(pcb->lock);
+		List_AddTail(&pcb->dev_list, rmt_dev);
+		LEAVE_CRITICAL(pcb->lock);
+	}
+
+	if (src_dev->class_of_device) {
+		rmt_dev->class_of_device = src_dev->class_of_device;
+	}
+
+	rmt_dev->carplay = hlp_gap_get_carplay_service(src_dev->eir, src_dev->eir_size);
+
+	while (i < src_dev->eir_size) {
+		if (src_dev->eir[i + 1] == HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME) {
+			len = DEV_NAME_LEN > src_dev->eir[i] ? src_dev->eir[i] : DEV_NAME_LEN;
+			memset(rmt_dev->name, 0, DEV_NAME_LEN + 1);
+			utf8_strncpy(rmt_dev->name, src_dev->eir + i + 2,  len -1);//FIXME: Maybe include illegal char in name string when len>9
+			break;
+		}
+
+		i += (src_dev->eir[i] + 1);
+	}
+
+	bse_log_info(TAG,  "on_remote_device_found:%s.", rmt_dev->name);
+
+#ifdef CONFIG_REPORT_DEVICE_WITH_NAME
+	if (len == 0) {
+		return GAP_IND_RESULT_NOT_CARE;
+	}
+#endif
+	if(rmt_dev->name[0] && (src_dev->addr.cap & HCI_ADDRESS_CAP_BREDR))
+		hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_FOUND, rmt_dev);
+
+	return GAP_IND_RESULT_NOT_CARE;
+}
+*/
+
+static void new_add_device_to_list(bt_remote_device_t *src_dev,UINT8 flag)
+{   
+    if (src_dev == NULL || s_new_remote_devlist.list == NULL) {
+        //UART_Printf("new_add_device_to_list return reason NULL!");
+        return;
+    }
+    bt_remote_device_t * rmt_dev = src_dev;
+    ENTER_CRITICAL(s_new_remote_devlist.lock);
+    bt_remote_device_t *p_node = (bt_remote_device_t *)NewListFind(s_new_remote_devlist.list, rmt_dev->bd, BD_ADDR_LEN);
+    if (p_node == NULL) {
+        p_node = hlp_manager_find_target_device(rmt_dev->bd);
+        if (p_node == NULL) {
+            p_node = BtListMemberNew(sizeof(bt_remote_device_t));
+            memcpy(p_node, rmt_dev, sizeof(bt_remote_device_t));
+            p_node->bond_state = ST_BOND_NONE;
+            NewListAddTail(s_new_remote_devlist.list, (unsigned char*)p_node);
+            LEAVE_CRITICAL(s_new_remote_devlist.lock);
+
+            if (flag == TRUE) {
+                hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_FOUND, rmt_dev);
+            }
+            return;
+        } else {
+            UINT8 update = 0;
+            //UINT16 uuid_size = sizeof(struct  eir_uuid_t);
+            if (memcmp(rmt_dev->name,p_node->name,DEV_NAME_LEN) != 0) {
+                update = 1;
+                //UART_Printf("[gap]  update BondDev name!");
+                memset(p_node->name,0,DEV_NAME_LEN + 1);
+                memcpy(p_node->name,rmt_dev->name,DEV_NAME_LEN);
+            } 
+            /*if (memcmp(&rmt_dev->uuid,&p_node->uuid,uuid_size) != 0) {
+                update = 1;
+                UART_Printf("[gap]  update BondDev uuid!");
+                memset(&p_node->uuid,0,uuid_size);
+                memcpy(&p_node->uuid,&rmt_dev->uuid,uuid_size);
+            } */
+            if (update) {
+                hlp_manager_save_configure(0, DEV_INFO_LEN_RMT_DEVS);
+            }
+            /*add bonded device to discover list.*/
+            bt_remote_device_t *node = NULL;
+            node = BtListMemberNew(sizeof(bt_remote_device_t));
+            memcpy(node, rmt_dev, sizeof(bt_remote_device_t));
+            node->bond_state = ST_BOND_BONDED;
+            NewListAddTail(s_new_remote_devlist.list, (unsigned char*)node);
+            LEAVE_CRITICAL(s_new_remote_devlist.lock);
+
+            if (flag == TRUE) {
+                hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_FOUND, node);
+            }
+            return;
+        }
+    }
+    LEAVE_CRITICAL(s_new_remote_devlist.lock);
+}
+
+static tGAP_IndCbk_Result on_remote_device_found(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct GAP_RemoteDeviceInfoStru *src_dev, UINT32 size)
+{
+    //UART_Printf("src_dev->rssi=%d",src_dev->rssi);
+    UINT16 i = 0;
+    UINT16 len = 0;
+    device_discovery_cb_t * pcb = NULL;
+    bt_remote_device_t *rmt_dev = NULL;
+  
+    if (!context) {
+        return GAP_IND_RESULT_NOT_CARE;
+    }
+
+    pcb = (device_discovery_cb_t *) context;
+    ENTER_CRITICAL(pcb->lock);
+    rmt_dev = pcb->dev_list.head;
+
+/*
+    while ((rmt_dev != NULL) && (memcmp(rmt_dev->bd, src_dev->addr.bd, 6) ||
+                             !(src_dev->addr.cap & HCI_ADDRESS_CAP_BREDR))) 
+*/                            
+    while ((rmt_dev != NULL) && (memcmp(rmt_dev->bd, src_dev->addr.bd, 6) ))
+    {
+        rmt_dev = LNEXT(rmt_dev);
+    }
+    LEAVE_CRITICAL(pcb->lock);
+
+    if (rmt_dev == NULL) {
+        rmt_dev = List_NodeNew(sizeof(bt_remote_device_t));
+
+        memset(rmt_dev, 0, sizeof(bt_remote_device_t));
+        if (rmt_dev == NULL) {
+            return GAP_IND_RESULT_NOT_CARE;
+        }
+        memcpy(rmt_dev->bd, src_dev->addr.bd, BD_ADDR_LEN);
+        ENTER_CRITICAL(pcb->lock);
+        List_AddTail(&pcb->dev_list, rmt_dev);
+        LEAVE_CRITICAL(pcb->lock);
+    }
+
+    if (app_gap_is_discovering()) {
+        rmt_dev->class_of_device = src_dev->class_of_device;
+    }
+
+	rmt_dev->carplay = hlp_gap_get_carplay_service(src_dev->eir, src_dev->eir_size);
+	if(src_dev->addr.cap & HCI_ADDRESS_CAP_BREDR)
+	{
+		src_dev->addr.cap = 0;
+	}else{
+		src_dev->addr.cap = 1;
+	}
+	if(rmt_dev->carplay)
+		src_dev->addr.cap = 3;
+
+    #if 0
+    UINT8 mm = 0;
+    UINT8 s_len = src_dev->eir_size>10?10:src_dev->eir_size;
+    bse_log_api(TAG, "[APP] EIR : ");
+    for(mm = 0;mm < s_len;mm++) {
+        bse_log_api(TAG, "%02d",src_dev->eir[mm]);
+    }
+    #endif
+    UINT16 eir_len = src_dev->eir_size;
+    while (i < eir_len) {
+        if (i+1 >= eir_len) {
+            //UART_Printf("EIR data length error0!!");
+            break;
+        }
+        if (src_dev->eir[i + 1] == HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME) {
+            /*13 9 [74 97 121 39 115 32 105 80 104 111 110 101] 13 = Jay's iphone*/
+            if (i + src_dev->eir[i] +1 <= eir_len) {
+                len = DEV_NAME_LEN > src_dev->eir[i] ? src_dev->eir[i] : DEV_NAME_LEN;
+                memset(rmt_dev->name, 0, DEV_NAME_LEN + 1);
+                if (i + 2 + len-1 <= eir_len) {
+                    memcpy(rmt_dev->name,src_dev->eir + i + 2,  len-1);
+                //utf8_strncpy(rmt_dev->name, src_dev->eir + i + 2,  len-1);//extened the EIR length
+                } else {
+                    //UART_Printf("EIR name length error1!!");
+                }
+            } else {
+                //UART_Printf("EIR data length error1!!");
+            }
+            //break;
+        } /*else if (src_dev->eir[i + 1] >= HCI_EIR_DATATYPE_INCOMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS 
+                    &&src_dev->eir[i + 1] <= HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS ) {
+            if (i + src_dev->eir[i] +1 <= src_dev->eir_size) {
+                memset(&(rmt_dev->uuid), 0,sizeof(struct  eir_uuid_t));
+                rmt_dev->uuid.uuid_len = src_dev->eir[i]-1;
+                if (i + 2 + rmt_dev->uuid.uuid_len -1 <= eir_len) {
+                    memcpy(rmt_dev->uuid.uuid ,src_dev->eir + i + 2,rmt_dev->uuid.uuid_len);
+                }else {
+                    UART_Printf("EIR UUID length error1!!");
+                }
+            } else {
+                UART_Printf("EIR data length error2!!");
+            }
+        }*/
+        if (src_dev->eir[i]) {
+            i += (src_dev->eir[i] + 1);//length filed not include itself.
+        } else {
+            break;
+        }
+    }
+    
+    /*if name is NULL,do not care.*/
+    if (len) {    
+        bse_log_print(TAG, "\r\n", "on_remote_device_found:len(%d),%s.", len-1,rmt_dev->name);
+		rmt_dev->cap = src_dev->addr.cap;
+        rmt_dev->rssi = src_dev->rssi;
+        new_add_device_to_list(rmt_dev,TRUE);
+    } else { 
+        bse_log_print(TAG, "\r\n", "on_remote_device_found:have no name,ignore!");
+    }
+    return GAP_IND_RESULT_NOT_CARE;
+}
+
+static tGAP_IndCbk_Result on_remote_device_name_updated(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct HCI_Remote_Name_Request_CompleteEvStru *src_dev, UINT32 size)
+{
+	device_discovery_cb_t *pcb;
+	bt_remote_device_t *rmt_dev;
+	UINT16 len;
+
+	if (!context) return GAP_IND_RESULT_NOT_CARE;
+
+	pcb = (device_discovery_cb_t *) context;
+
+	ENTER_CRITICAL(pcb->lock);
+	rmt_dev = LIST_FINDLENOFF0(&pcb->dev_list, BD_ADDR_LEN, src_dev->bd);
+	LEAVE_CRITICAL(pcb->lock);
+
+	if (rmt_dev != NULL) {
+		len = strlen(src_dev->remote_name);
+		len = len > DEV_NAME_LEN ? DEV_NAME_LEN : len;
+		utf8_strncpy(rmt_dev->name, src_dev->remote_name,  len);
+#ifdef CONFIG_REPORT_DEVICE_WITH_NAME
+		hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_FOUND, rmt_dev);
+#else
+		hlp_gap_event_cbk(EV_APP_GAP_DISCOVERY_DEVICE_UPDATED, rmt_dev);
+#endif
+	}
+
+	return GAP_IND_RESULT_NOT_CARE;
+}
+
+tGAP_IndCbk_Result hlp_gap_hardware_error_event_cbk(HANDLE tl_handle, void *context,tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	hlp_gap_event_cbk(EV_APP_GAP_HARDWARE_ERROR, NULL);
+	return GAP_IND_RESULT_NOT_CARE;
+}
+
+tGAP_IndCbk_Result hlp_gap_vendor_event_cbk(HANDLE tl_handle, void *context,tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	g_vendor_itf->vendor_event_ind(par, size);
+
+	return GAP_IND_RESULT_NOT_CARE;
+}
+#ifdef CONFIG_BIND_PROFILES
+extern int a2dp_disallow_tmp;
+extern UINT8 deny_a2dp_address[6];
+extern UINT8 deny_a2dp_initaddr[6];
+tGAP_IndCbk_Result hlp_gap_authorize_request_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	int ret = 0;
+	int bond_profile_v = bt_manager_get_binded_profiles_value();
+	struct HCI_Security_AuthorReqStru * authorize_request = (struct HCI_Security_AuthorReqStru *)par;
+	struct authorize_request_stru auth_req = {0};
+
+	bse_log_info(TAG, "hlp_gap_authorize_request_cbk channel :%d,proto_id:%d,ampid:%d,result:%d,hcihdl:%08x a2dp_disallow_tmp = %d bond_profile_v = %d\r\n", \
+	authorize_request->channel,authorize_request->proto_id, authorize_request->ampid,authorize_request->result,authorize_request->hcihdl, \
+	a2dp_disallow_tmp, bond_profile_v);
+
+	s_current_hci_handle = authorize_request->hcihdl;
+	memcpy(s_addr,authorize_request->addr,sizeof(struct HCI_AddressStru));
+
+	if(authorize_request->proto_id == PROT_RFCOMM && authorize_request->channel == hlp_hfp_get_channel())
+		auth_req.nType = PROFILE_ID_HFP;
+	else if(authorize_request->proto_id == PROT_L2CAP && authorize_request->channel == PSM_AVDTP) {
+		auth_req.nType = PROFILE_ID_A2DP;
+		//if(a2dp_disallow_tmp && ((memcmp(deny_a2dp_address, authorize_request->addr[1].bd, 6) == 0) || memcmp(deny_a2dp_address, deny_a2dp_initaddr, 6) == 0))
+			//ret = 1;
+		if(!(bond_profile_v & PROFILE_BT_A2DP_SINK))
+			ret = 1;
+	}	
+	else if(authorize_request->proto_id == PROT_L2CAP && authorize_request->channel == PSM_AVCTP) {
+		auth_req.nType = PROFILE_ID_AVRCP;
+		if(!(bond_profile_v & PROFILE_BT_AVRCP_CT))
+			ret = 1;
+	}
+		
+	memcpy(auth_req.bd,authorize_request->addr[1].bd,BD_ADDR_LEN);
+	hlp_gap_event_cbk(EV_APP_GAP_AUTHORIZE_REQUEST,&auth_req);
+	//return GAP_IND_RESULT_PENDING;//FIXME: GAP_IND_RESULT_PENDING
+	bse_log_info(TAG,"%s ret = %d\n", __func__, ret);
+	if(!ret)
+		return GAP_IND_RESULT_ACCEPT;
+	return GAP_IND_RESULT_REJECT;
+}
+#else
+tGAP_IndCbk_Result hlp_gap_authorize_request_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type, void *par, UINT32 size)
+{
+	struct HCI_Security_AuthorReqStru * authorize_request = (struct HCI_Security_AuthorReqStru *)par;
+	struct authorize_request_stru auth_req = {0};
+
+	bse_log_info(TAG, "hlp_gap_authorize_request_cbk channel :%d,proto_id:%d,ampid:%d,result:%d,hcihdl:%08x\r\n",authorize_request->channel,authorize_request->proto_id, authorize_request->ampid,authorize_request->result,authorize_request->hcihdl);
+	s_current_hci_handle = authorize_request->hcihdl;
+	memcpy(s_addr,authorize_request->addr,sizeof(struct HCI_AddressStru));
+
+	if(authorize_request->proto_id == PROT_RFCOMM && authorize_request->channel == hlp_hfp_get_channel())
+		auth_req.nType = PROFILE_ID_HFP;
+	else if(authorize_request->proto_id == PROT_L2CAP && authorize_request->channel == PSM_AVDTP)
+		auth_req.nType = PROFILE_ID_A2DP;
+	else if(authorize_request->proto_id == PROT_L2CAP && authorize_request->channel == PSM_AVCTP)
+		auth_req.nType = PROFILE_ID_AVRCP;
+	memcpy(auth_req.bd,authorize_request->addr[1].bd,BD_ADDR_LEN);
+	hlp_gap_event_cbk(EV_APP_GAP_AUTHORIZE_REQUEST,&auth_req);
+	return GAP_IND_RESULT_PENDING;//FIXME: GAP_IND_RESULT_PENDING
+}
+#endif
+static void on_remote_device_bonded(UINT8 *remote_bd)
+{
+	bt_remote_device_t *rmt_dev;
+
+	if (!s_discovery_cb) return;
+
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	rmt_dev = LIST_FINDLENOFF0(&s_discovery_cb->dev_list, BD_ADDR_LEN, remote_bd);
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+
+	bse_log_api(TAG,  "%s", __FUNCTION__);
+	if (rmt_dev == NULL) {
+		rmt_dev = List_NodeNew(sizeof(bt_remote_device_t));
+		memcpy(rmt_dev->bd, remote_bd, BD_ADDR_LEN);
+		rmt_dev->bond_state = ST_BOND_BONDED;
+		ENTER_CRITICAL(s_discovery_cb->lock);
+		List_AddHead(&s_discovery_cb->dev_list, rmt_dev);
+		LEAVE_CRITICAL(s_discovery_cb->lock);
+	}
+	
+}
+
+#ifdef GAP_IO_CAPABILITIES_FULL
+tGAP_IndCbk_Result hlp_gap_passkey_req_cbk(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct HCI_User_Passkey_RequestEvStru *par, UINT32 size)
+{
+	hlp_gap_event_cbk(EV_APP_GAP_PASSKEY_REQ, par->bd);
+	return GAP_IND_RESULT_PENDING;
+}
+
+tGAP_IndCbk_Result hlp_gap_passkey_notify_ind(HANDLE tl_handle, void *context, tGAP_Ind_Type ind_type,
+        struct HCI_User_Passkey_NotificationEvStru *par, UINT32 size)
+{
+	bt_remote_device_t dev;
+	if (par != NULL) {
+		memcpy(dev.bd, par->bd, BD_ADDR_LEN);
+		dev.bond_state = ST_BOND_BONDING;
+		hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+		hlp_gap_event_cbk(EV_APP_GAP_PASSKEY_NOTIF, par);
+	}
+	return GAP_IND_RESULT_PENDING;
+}
+
+#endif
+
+static void bond_result_callback(void *context, UINT16 result, void *cfm_par)
+{
+	bt_remote_device_t dev;
+
+	if (!context) {
+		return;
+	}
+	// borrow struct "bt_remote_device_t"
+
+	memcpy(dev.bd, context, BD_ADDR_LEN);
+
+	if (result != HCI_STATUS_OK) {
+		dev.bond_state = ST_BOND_NONE;
+		hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+	} else {
+		dev.bond_state = ST_BOND_BONDED;
+		hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+	}
+	FREE(context);
+	// TODO other action?
+}
+
+void app_gap_create_bond(UINT8 *bd_addr)
+{
+	struct GAP_PairReqStru req;
+	UINT8 *bd = NEW(BD_ADDR_LEN);
+	bt_remote_device_t dev;
+
+	req.addr.cap = HCI_ADDRESS_CAP_MAIN;
+	req.addr.atype = HCI_OWN_ADDRESS_TYPE_PUBLIC_DEVICE_ADDRESS;
+	memcpy(req.addr.bd, bd_addr, BD_ADDR_LEN);
+	req.use_sm_3 = GAP_FALSE;
+	memcpy(bd, bd_addr, BD_ADDR_LEN);
+
+	memcpy(dev.bd, bd_addr, BD_ADDR_LEN);
+	dev.bond_state = ST_BOND_BONDING;
+	hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+
+	GAP_PairDeviceA(NULL, bd, &req, bond_result_callback);
+}
+
+static void hlp_gap_remove_bond(UINT8 *bd_addr)
+{
+	bt_remote_device_t *rmt_dev = NULL;
+
+	if (bd_addr == NULL) {
+		return;
+	}
+
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	rmt_dev = s_discovery_cb->dev_list.head;
+
+	while ((rmt_dev != NULL) && memcmp(rmt_dev->bd, bd_addr, 6)) {
+		rmt_dev = LNEXT(rmt_dev);
+	}
+
+	if (rmt_dev != NULL) {
+		List_RemoveAt(&s_discovery_cb->dev_list, rmt_dev);
+		LFREE(rmt_dev);
+	}
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+}
+
+void app_gap_remove_all_device()
+{
+	ENTER_CRITICAL(s_discovery_cb->lock);
+	bt_remote_device_t *rmt_dev = s_discovery_cb->dev_list.head;
+	while ((rmt_dev != NULL)) {
+		//hlp_gap_event_cbk(EV_APP_GAP_REMOVE_PLIST, (void *)rmt_dev);
+		hlp_manager_remove_bond(rmt_dev->bd);
+		List_RemoveAt(&s_discovery_cb->dev_list, rmt_dev);
+		rmt_dev = LNEXT(rmt_dev);
+	}
+	LEAVE_CRITICAL(s_discovery_cb->lock);
+}
+
+void app_gap_remove_bond(UINT8 *bd_addr)
+{
+    if (bd_addr) {
+    	bt_remote_device_t dev;
+        bse_log_api(TAG, "remove_bd:%02x%02x%02x%02x%02x%02x \r\n", bd_addr[0],bd_addr[1],bd_addr[2],bd_addr[3],bd_addr[4],bd_addr[5]);
+    	hlp_gap_remove_bond(bd_addr);
+    	hlp_manager_remove_bond(bd_addr);
+
+    	memcpy(dev.bd, bd_addr, BD_ADDR_LEN);
+    	dev.bond_state = ST_BOND_NONE;
+    	//hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+		//hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+	} else {//remove all
+	    /*ENTER_CRITICAL(s_discovery_cb->lock);
+    	List_RemoveAll(&s_discovery_cb->dev_list);
+    	LEAVE_CRITICAL(s_discovery_cb->lock);*/
+		app_gap_remove_all_device();
+
+	}
+	hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+}
+
+void app_gap_pincode_reply(UINT8 *bd_addr, UINT8 accept, UINT8 pin_len, UINT8 *pincode)
+{
+	char cfm;
+	struct HCI_PIN_Code_Request_ReplyStru reply;
+	memcpy(reply.bd, bd_addr, BD_ADDR_LEN);
+
+	if (!accept) {
+		GAP_ExecuteCommandA(NULL, NULL, HCI_OPS_PIN_CODE_REQUEST_NEGATIVE_REPLY, &reply,
+		                    sizeof(struct HCI_PIN_Code_Request_Negative_ReplyStru), NULL);
+	} else {
+		memcpy(reply.pin_code, pincode, pin_len);
+		reply.pin_code_len = pin_len;
+		GAP_ExecuteCommandA(NULL, NULL, HCI_OPS_PIN_CODE_REQUEST_REPLY, &reply,
+		                    sizeof(struct HCI_PIN_Code_Request_ReplyStru), NULL);
+	}
+
+}
+
+void app_gap_passkey_reply(UINT8 *bd_addr, UINT8 accept, UINT32 passkey)
+{
+	struct HCI_User_Passkey_Request_ReplyStru reply;
+	memcpy(reply.bd, bd_addr, BD_ADDR_LEN);
+
+	reply.numeric_value = passkey;
+	// FIXME ignore accept value?
+	if (accept) {
+		GAP_ExecuteCommandA(NULL, NULL, HCI_OPS_USER_PASSKEY_REQUEST_REPLY, &reply,
+		                    sizeof(struct HCI_User_Passkey_Request_ReplyStru), NULL);
+	} else {
+		GAP_ExecuteCommandA(NULL, NULL, HCI_OPS_USER_PASSKEY_REQUEST_REPLY, &reply,
+		                    sizeof(struct HCI_User_Passkey_Request_Negative_ReplyStru), NULL);
+	}
+}
+
+void app_gap_user_confirmation(UINT8 *bd_addr, UINT8 accept)
+{
+	char cfm;
+	UINT32 opid = HCI_OPS_USER_CONFIRMATION_REQUEST_NEGATIVE_REPLY;
+	struct HCI_User_Confirmation_Request_ReplyStru reply;
+
+	memcpy(reply.bd, bd_addr, BD_ADDR_LEN);
+
+	if (accept) {
+		opid = HCI_OPS_USER_CONFIRMATION_REQUEST_REPLY;
+	}
+
+	GAP_ExecuteCommandA(NULL, NULL, opid, &reply, sizeof(struct HCI_User_Confirmation_Request_ReplyStru), NULL);
+}
+
+void hlp_gap_QoS_setup(UINT16 connection_handle)
+{
+	struct HCI_QoS_SetupStru qos;
+	memset(&qos, 0, sizeof(struct HCI_QoS_SetupStru));
+
+	qos.connection_handle = connection_handle;
+	qos.flags = 0;
+	qos.service_type = 1;
+	qos.token_rate = 40000;
+	qos.peak_bandwidth = 60000;
+	qos.latency = 0x2bf2; // 11ms
+	qos.delay_variation = 0xFFFFFFFF;
+
+	hlp_gap_excute_command(HCI_OPS_QOS_SETUP, 0, &qos, sizeof(struct HCI_QoS_SetupStru));
+}
+
+UINT16 hlp_gap_get_connection_handle(UINT8 *remote_bd)
+{
+	UINT16 conn_hdl;
+
+#ifdef CONFIG_STACK85
+	struct HCI_AddressStru bd_stru;
+	bd_stru.cap = HCI_ADDRESS_CAP_BREDR;
+	bd_stru.atype = HCI_OWN_ADDRESS_TYPE_PUBLIC_DEVICE_ADDRESS;
+	memcpy(bd_stru.bd, remote_bd, BD_ADDR_LEN);
+	GAP_GetConnHandle(NULL, &bd_stru, GAP_LINK_TYPE_BREDR, &conn_hdl);
+#else
+	GAP_GetConnHandle(NULL, remote_bd, GAP_LINK_TYPE_BREDR, &conn_hdl);
+#endif
+	return conn_hdl;
+}
+
+UINT8 hlp_gap_disconnect_acl_if_exist()
+{
+	if (s_current_acl_handle != 0xFFFF) {
+		struct HCI_DisconnectStru par;
+		par.connection_handle = s_current_acl_handle;
+		par.reason = HCI_STATUS_REMOTE_USER_TERMINATED_CONNECTION;
+		hlp_gap_excute_command(HCI_OPS_DISCONNECT, 0, &par, sizeof(struct HCI_DisconnectStru));
+
+		return 1;
+	}
+	return 0;
+}
+
+static void hlp_bonding_timeout_callback(void *arg)
+{
+	bt_remote_device_t dev;
+	UINT8 *bd_addr = (UINT8 *) arg;
+
+	if (bd_addr != NULL) {
+		memcpy(dev.bd, bd_addr, BD_ADDR_LEN);
+		dev.bond_state = ST_BOND_NONE;
+		hlp_gap_event_cbk(EV_APP_GAP_BOND_STATE_CHANGED, &dev);
+
+		FREE(bd_addr);
+	}
+
+	s_bonding_timer = NULL;
+}
+
+static void hlp_guard_bonding_result(UINT8 *bd_addr)
+{
+	UINT8 *bd = NEW(BD_ADDR_LEN);
+	memcpy(bd, bd_addr, BD_ADDR_LEN);
+
+	s_bonding_timer = FsmAddTimer(NULL, 30000, 0, bd, NULL, (UINT32) hlp_bonding_timeout_callback);
+}
+static void do_reset_hardware()
+{
+	bse_log_info(TAG,"%s", __func__);
+	g_vendor_itf->vendor_pre_reset();
+	hlp_gap_set_status(ST_GAP_READY);
+	GAP_ResetHardwareA(GAP_TL_HANDLE, 0, (GAP_ResetHardwareCfmCbk *)hlp_gap_reset_hardware_cbk);
+}
+
+static void do_set_class_of_device()
+{
+	UINT16 *cod;
+// TODO    if (result)
+	{
+		// FIXME get value by event callback?
+		struct gap_req_data_stru req_data;
+		memset(&req_data, 0, sizeof(struct gap_req_data_stru));
+		hlp_gap_event_cbk(EV_APP_GAP_REQ_LOCAL_DEVICE_CLASS, &req_data);
+		cod = req_data.p_ret_data;
+	}
+
+	hlp_gap_set_local_device_class(cod);
+}
+
+static void do_set_local_name()
+{
+	struct gap_req_data_stru req_data;
+	memset(&req_data, 0, sizeof(struct gap_req_data_stru));
+	hlp_gap_event_cbk(EV_APP_GAP_REQ_LOCAL_DEVICE_NAME, &req_data);
+	hlp_gap_set_local_device_name(req_data.p_ret_data);
+}
+
+static void do_set_other_attribute()
+{
+	if (GAP_STATE != ST_GAP_WORKING) {
+		hlp_gap_set_device_other_attribute();
+		on_init_state_changed(BT_INIT_PROC_SET_OTHER_ATTR);
+	}
+}
+
+static void get_services_req_cbk(UINT8 *bd, UINT32 number, UINT16 *param)
+{
+	UINT8 i = 0;
+	UINT8 buf[128];//12 * 4 + 12 + 1 + 1
+	UINT16 *services ;
+	UINT8 offset = 0;
+	bse_log_api(TAG, "get_services_req_cbk number is %d", number);
+	if(number == 0) {
+		return ;
+	}
+	int svc_len = number * sizeof(UINT16);
+	services = (UINT16*)NEW(svc_len + 1);
+	memset(services, 0, svc_len + 1);
+	memcpy(services, param, svc_len);
+
+	memset(buf, 0, 128);
+	sprintf(buf, "%02X%02X%02X%02X%02X%02X", bd[5], bd[4], bd[3], bd[2], bd[1], bd[0]);
+	offset += 12;
+	sprintf(buf + offset, "%02X", number);
+	offset += 2;
+	bse_log_info(TAG, "buf is %s", buf);
+
+	for(i = 0; i < number; i++) {
+		sprintf(buf + offset, "%04X", services[i]);
+		offset += 4;
+		bse_log_verbose(TAG, "support %d service: %x", i, services[i]);
+	}
+	hlp_gap_event_cbk(EV_APP_GAP_SERVICES_IND, buf);
+	FREE(services);
+	bse_log_info(TAG, "get_services_req_cbk end");
+	return ;
+}
+
+void hlp_get_services_req(UINT8 *bd)
+{
+	bse_log_api(TAG, "hlp_get_services_req:%02X:%02X:%02X:%02X:%02X:%02X", bd[0], bd[1], bd[2], bd[3], bd[4], bd[5]);
+	GetRemoteServiceListReq(bd, get_services_req_cbk);
+}
+
+void *hlp_get_gap_handle(void)
+{
+	return GAP_TL_HANDLE;
+}
+
+void hlp_gap_user_author_req(int profile_id, unsigned char select)
+{
+	struct HCI_Security_AuthorReqStru *auth_rsp;
+
+	auth_rsp = NEW(sizeof(struct HCI_Security_AuthorReqStru));
+	memset(auth_rsp, 0, sizeof(struct HCI_Security_AuthorReqStru));
+	memcpy(auth_rsp->addr,s_addr,sizeof(struct HCI_AddressStru));
+	auth_rsp->hcihdl = s_current_hci_handle;//Get ACL Handle
+	bse_log_info(TAG, "app_gap_user_author_req select :%d , profile_id:%d\r\n",select, profile_id);
+	if ( profile_id == PROFILE_ID_HFP) { //PROFILE_HFP)
+		auth_rsp->ampid = 0;
+		auth_rsp->channel = 1;
+		auth_rsp->proto_id = PROT_RFCOMM;
+	} else if ( profile_id == PROFILE_ID_A2DP) {
+		auth_rsp->ampid = 0;
+		auth_rsp->channel = PSM_AVDTP;
+		auth_rsp->proto_id = PROT_L2CAP;
+	} else if( profile_id == PROFILE_ID_AVRCP) {
+		auth_rsp->ampid = 0;
+		auth_rsp->channel = PSM_AVCTP;
+		auth_rsp->proto_id = PROT_L2CAP;
+	}
+
+	if(!select)
+		auth_rsp->result = HCI_STATUS_CONNECTION_REJECTED_SECURITY_REASONS;//If rejected
+	else
+		auth_rsp->result = HCI_STATUS_OK;
+	HCI_Security_Authorized(auth_rsp);
+
+}
+
+bt_status_t hlp_gap_write_eir()
+{
+    struct HCI_EIR_DataNodeStru *node_new;
+    struct ListStru eir_info = {NULL, NULL};
+    NEWSTRU(struct HCI_Write_Extended_Inquiry_ResponseStru, eir_cmd);
+
+    if (eir_cmd == NULL) {
+        bse_log_info(TAG, "%s fail!! No memory available.", __func__);
+        return BT_STATUS_NOMEM;
+    }
+
+    eir_cmd->fec_required = 0x00;
+    memset(eir_cmd->extended_inquiry_response, 0, 240);
+    node_new = s_eir_data_list.head;
+    while (node_new) {
+        struct HCI_EIR_DataNodeStru* pNode  = List_NodeNew(VARLEN(struct HCI_EIR_DataNodeStru *, len, 1/*len itself*/ + 1/*eir_data_type*/ + node_new->len));
+        pNode->len = node_new->len;
+        pNode->eir_data_type = node_new->eir_data_type;
+        if (node_new->len > 1) {
+            memcpy(&pNode->u, &node_new->u, node_new->len - 1);
+        }
+        List_AddTail(&eir_info, pNode);
+        node_new = LNEXT(node_new);
+    }
+    HCI_Extended_Inquiry_Response_Encode(&eir_info, eir_cmd->extended_inquiry_response, eir_cmd->extended_inquiry_response + 239);
+    hlp_gap_excute_command(HCI_OPS_WRITE_EXTENDED_INQUIRY_RESPONSE, NULL, eir_cmd, sizeof(struct HCI_Write_Extended_Inquiry_ResponseStru));
+    FREE(eir_cmd);
+    List_RemoveAll(&eir_info);
+    return BT_STATUS_SUCCESS;
+}
+
+ bt_status_t hlp_gap_add_eir_uuid(UINT8 *data, UINT8 data_len, UINT8 type)
+ {
+     UINT8 *dest;
+     struct HCI_EIR_DataNodeStru *node_new;
+     node_new = List_NodeNew(VARLEN(struct HCI_EIR_DataNodeStru *, len, 1/*len itself*/ + 1/*EIR data type*/ + data_len));
+
+     if (NULL != node_new) {
+         node_new->eir_data_type = type;
+         node_new->len = 1/*EIR data type*/ + data_len;
+     } else {
+         bse_log_info(TAG, "%s fail!! No memory available.", __func__);
+         return BT_STATUS_NOMEM;
+     }
+
+     switch (type) {
+     case HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME:
+     {
+		//If eir_node already exist, delete it and add a new one
+		struct HCI_EIR_DataNodeStru *node_old = s_eir_data_list.head;
+		while (node_old) {
+			if (node_old->eir_data_type == type) {
+			break;
+		}
+			node_old = LNEXT(node_old);
+		}
+		if (node_old) {
+			bse_log_info(TAG, "%s, remove old eir node", __func__);
+			List_RemoveAt(&s_eir_data_list, node_old);
+			LFREE(node_old);
+		}
+         memcpy((void*)node_new->u.name.data, data, data_len);
+         List_AddTail(&s_eir_data_list, node_new);
+    }
+    break;
+    case HCI_EIR_DATATYPE_INCOMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS:
+    {
+        UINT8 *p_uuid = data;
+        dest = node_new->u.uuid128;
+        EncodeNew(dest, p_uuid + 8 + 4, 3, 1);
+        EncodeNew(dest + 4, p_uuid + 8, 3, 1);
+        EncodeNew(dest + 8, p_uuid + 6, 2, 0);
+        EncodeNew(dest + 10, p_uuid + 4, 2, 0);
+        EncodeNew(dest + 12, p_uuid, 3, 0);
+        List_AddTail(&s_eir_data_list, node_new);
+    }
+    break;
+    case HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS:
+    {
+        UINT8 *p_uuid = data;
+        dest = node_new->u.uuid128;
+        EncodeNew(dest, p_uuid + 8 + 4, 3, 1);
+        EncodeNew(dest + 4, p_uuid + 8, 3, 1);
+        EncodeNew(dest + 8, p_uuid + 6, 2, 1);
+        EncodeNew(dest + 10, p_uuid + 4, 2, 1);
+        EncodeNew(dest + 12, p_uuid, 3, 0);
+        List_AddTail(&s_eir_data_list, node_new);
+    }
+    break;
+     case HCI_EIR_DATATYPE_TX_POWER_LEVEL:
+     {
+         node_new->u.tx_power_level = *data;
+         List_AddTail(&s_eir_data_list, node_new);
+     }
+     break;
+#ifdef CONFIG_MANUFACTURER_DATA_DISCOVERY_FILTER
+    case HCI_EIR_DATATYPE_MANUFACTURER_SPECIFIC_DATA:
+    {
+        node_new->u.manufacturer_data.company_identifier_code[0] = 0x34;
+        node_new->u.manufacturer_data.company_identifier_code[1] = 0x0C;
+        memcpy((void*)node_new->u.manufacturer_data.data, data, data_len);
+        List_AddTail(&s_eir_data_list, node_new);
+    }
+    break;
+#endif
+    default:
+        bse_log_info(TAG, "%s type 0x%x Not implement.", __func__, type);
+        LFREE(node_new);
+        return BT_STATUS_UNHANDLED;
+    }
+
+    return BT_STATUS_SUCCESS;
+}
+	
+void hlp_set_usr_pair_mode(int usr_value)
+{
+	user_accq = usr_value;
+	printf("user_accq = %d start_ok\n", user_accq);
+	//hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+	bt_event_indicate(BT_EV_SET_SSP_STAT, (void *)1);
+}
+
+void hlp_set_usr_ssp_mode(int ssp_value)
+{
+	ssp_mode_x = ssp_value;
+	printf("ssp_mode_x = %d start_ok\n", ssp_mode_x);
+	//hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+	bt_event_indicate(BT_EV_SET_SSP_STAT, 0);
+}
+
+void hlp_set_usr_iocap_mode(int iocap_value)
+{
+	iocap_mode_x = iocap_value;
+	printf("iocap_mode_x = %d start_ok\n", iocap_mode_x);
+	//hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+	if(iocap_mode_x)
+		bt_event_indicate(BT_EV_SET_SSP_STAT, (void *)2);
+	else
+		bt_event_indicate(BT_EV_SET_SSP_STAT, (void *)3);
+}
+
+void hlp_gap_response_ok()
+{
+	hlp_gap_event_cbk(EV_APP_GAP_OK, NULL);
+}

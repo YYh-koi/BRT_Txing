@@ -1,0 +1,221 @@
+#include "auto_at.h"
+#include "ring_buffer.h"
+#include "auto_at_internal.h"
+
+#include <string.h>
+#include <stdlib.h>
+
+#if defined(CONFIG_DEBUG)
+#define UI_RX_BUF_SIZE	512
+
+#else
+#ifdef CONFIG_LONG_AT
+#define UI_RX_BUF_SIZE	2048
+#else
+#define UI_RX_BUF_SIZE	256
+#endif
+
+#endif
+
+#ifdef CONFIG_LONG_AT
+#define MAX_LINE_LEN	1023
+#else
+#define MAX_LINE_LEN	255
+#endif
+
+typedef struct _AT_STATIC
+{
+    unsigned int i;
+    unsigned char nStatus;	//0-idle,1-A found,2-AT found,3-AT# found,4-\r found,5-\r\n found 
+    unsigned short cmd_length;
+    char sCmdHead[4];
+    char sCmdLine[MAX_LINE_LEN];
+}AT_STATIC;
+
+static ring_buffer_t *s_AT_buffer  = NULL;
+static AT_STATIC *s_at = NULL;
+
+
+void at_init_internal()
+{
+    if (s_AT_buffer == NULL)
+    {
+        s_AT_buffer = ring_buffer_alloc(UI_RX_BUF_SIZE);
+    }
+
+    if (s_at == NULL)
+    {
+        s_at = (AT_STATIC *) NEW(sizeof(AT_STATIC));
+        memset(s_at, 0, sizeof(AT_STATIC));
+    }
+}
+
+void at_cleanup_internal()
+{
+    if (s_AT_buffer != NULL)
+    {
+        ring_buffer_free(s_AT_buffer);
+        s_AT_buffer = NULL;
+    }
+
+    if (s_at != NULL)
+    {
+        FREE(s_at);
+        s_at = NULL;
+    }
+}
+
+void at_process_internal()
+{
+    char cCurr = 0;
+    unsigned int nRead = 0;
+    
+    while (1)
+    {
+        nRead = ring_buffer_pull(s_AT_buffer, &cCurr, 1);
+
+        if (nRead > 0)
+        {
+            if (s_at->nStatus == 0)
+            {
+                if (cCurr == '#')
+                {
+                    s_at->i = 0;
+
+                    if (s_at->sCmdHead[0] == 'D')
+                    {
+                        s_at->nStatus = 1;
+                    }
+                    else if (s_at->sCmdHead[0] == 'L')
+                    {
+                        s_at->nStatus = 2;
+                    }
+                    else if (s_at->sCmdHead[0] == 'A' && s_at->sCmdHead[1] == 'T')
+                    {
+                        s_at->nStatus = 3;
+                    }
+                    else if (strstr(s_at->sCmdHead, "AT"))
+                    {
+                        memcpy(s_at->sCmdHead, "AT", 3);
+                        s_at->nStatus = 3;
+                    }
+                    else
+                    {
+                        memset(s_at->sCmdHead, 0, sizeof(s_at->sCmdHead));
+                    }
+                }
+                else if (s_at->i < 4)
+                {
+                    s_at->sCmdHead[s_at->i++] = cCurr;
+                    
+                    if (strstr(s_at->sCmdHead, "\r\n"))
+                    {
+                        memset(s_at->sCmdHead, 0, sizeof(s_at->sCmdHead));
+                        s_at->i = 0;
+                    }
+                }
+                else
+                {
+                    memset(s_at->sCmdHead, 0, sizeof(s_at->sCmdHead));
+                    s_at->i = 0;
+                }
+            }
+            else if (s_at->nStatus == 1)
+            {
+                s_at->sCmdLine[s_at->i++] = cCurr;
+
+                if (s_at->i == 4)
+                {
+                    s_at->cmd_length = strtoul(s_at->sCmdLine, NULL, 16);
+                }
+                else if ((s_at->i - 4) >= (s_at->cmd_length + 2))
+                {
+                    if ((s_at->sCmdLine[s_at->i - 2] == '\r') && (s_at->sCmdLine[s_at->i - 1] == '\n'))
+                    {
+                        s_at->sCmdLine[s_at->i - 2] = 0;
+                        s_at->nStatus = 4;
+                    }
+                }
+            }
+            else if (s_at->nStatus == 2)
+            {
+                s_at->sCmdLine[s_at->i++] = cCurr;
+
+                if (s_at->i == 2)
+                {
+                    s_at->cmd_length = strtoul(s_at->sCmdLine, NULL, 16);
+                }
+                else if ((s_at->i - 2) >= (s_at->cmd_length + 2))
+                {
+                    if ((s_at->sCmdLine[s_at->i - 2] == '\r') && (s_at->sCmdLine[s_at->i - 1] == '\n'))
+                    {
+                        s_at->sCmdLine[s_at->i - 2] = 0;
+                        s_at->nStatus = 4;
+                    }
+                }
+            }
+            else if (s_at->nStatus == 3)
+            {
+                s_at->sCmdLine[s_at->i++] = cCurr;
+
+                if ((cCurr == '\n') && (s_at->sCmdLine[s_at->i - 2] == '\r'))
+                {
+                    s_at->sCmdLine[s_at->i - 2] = s_at->sCmdLine[s_at->i - 1] = 0;
+                    s_at->nStatus = 4;
+                    s_at->cmd_length = strlen(s_at->sCmdLine)+1;
+                }
+            }
+            
+            if (s_at->nStatus == 4)
+            {
+                s_at->nStatus = 0;
+                s_at->i = 0;
+
+                at_process_interpret(s_at->sCmdHead, s_at->sCmdLine, s_at->cmd_length);
+
+                memset(s_at, 0, sizeof(AT_STATIC));
+                s_at->cmd_length = 0;
+            }
+        }
+        else
+        {
+            break;
+        }
+    }	
+}
+
+void at_init()
+{
+    //bt_init();
+    porting_init(get_porting_functions());
+    bt_power_init();
+    InitTimerEnv();
+    at_init_internal();
+}
+
+void at_cleanup()
+{
+    bt_done();
+}
+
+void at_runloop_execute()
+{
+    bt_runloop_execute();
+}
+
+void at_register_event_callback(at_event_callback cb)
+{
+    at_register_event_callback_internal(cb);
+}
+
+void at_register_event_len_callback(at_event_len_callback cb)
+{
+    at_register_event_len_callback_internal(cb);
+}
+
+void at_send(char *command)
+{
+    ring_buffer_push(s_AT_buffer, (void *)command, strlen(command));
+}
+
+

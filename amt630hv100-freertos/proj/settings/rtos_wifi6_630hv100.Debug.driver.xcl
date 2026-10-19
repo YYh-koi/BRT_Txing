@@ -1,0 +1,13 @@
+"--endian=little" 
+
+"--cpu=Cortex-A5" 
+
+"--fpu=VFPv4Neon" 
+
+"--semihosting=none" 
+
+"--multicore_nr_of_cores=1" 
+
+
+
+

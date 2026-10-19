@@ -1,0 +1,98 @@
+
+#ifndef __BRTBT_INTERFACE_H__
+#define __BRTBT_INTERFACE_H__
+
+#include <stdint.h>
+
+#ifndef BT_RESET_IO
+#define BT_RESET_IO        94
+#endif
+
+#ifndef BT_UART_PORT
+#define BT_UART_PORT       1
+#endif
+
+typedef enum
+{
+    BT_A2DP_PLAY_START = 0,
+    BT_A2DP_PLAY_STOP  = 1,
+    BT_HFP_PLAY_START = 2,
+    BT_HFP_PLAY_STOP = 3,
+    BT_PLAY_STATE_END
+} BT_PLAY_STATE_E;
+
+typedef enum
+{
+    BLE_EASY_CONNECTION = 0,
+    BLE_ERYA_CONNECTION = 1,
+    BLE_CLCAST_CONNECTION = 2,
+    BLE_CONNECTION_END
+} BLE_CONNECTION_TYPE_E;
+
+typedef enum
+{
+    BRT_MODULE_CHIP_RTL,
+    BRT_MODULE_CHIP_AIC,
+    BRT_MODULE_CHIP_BRT,
+    BRT_MODULE_CHIP_GT,
+    BRT_MODULE_CHIP_END
+} BRT_MODULE_CHIP_TYPE_E;
+
+typedef int (* bt_play_state_callback)(BT_PLAY_STATE_E state, unsigned short samplerate, unsigned char channel);
+typedef int (* bt_pcm_data_callback)(unsigned char* buffer, unsigned short length);
+
+/*mime maybe "JPEG", "GIF", "WBMP", "PNG", "JPEG2K", "BMP", "USR-XXX"*/
+typedef int (*bt_coverart_data_callback)(unsigned char *image_data, unsigned int image_size, const char *mime);
+
+typedef struct
+{
+    unsigned int bt_en_pin;
+    unsigned int uartport;
+    unsigned int bt_module;
+}bt_hw_cfg_t;
+
+typedef struct
+{
+    int   a2dp_resampler; // resample a2dp 44100 -> 48000 if set ,otherwise a2dp samplerate maybe 44100/48000 according to phone
+    int   debug_mode;
+    bt_play_state_callback play_state_cb;
+    bt_pcm_data_callback a2dp_cb;   //a2dp pcm data callback
+    bt_pcm_data_callback hfp_spk_cb;//hfp spk data
+    bt_coverart_data_callback coverart_cb;//coverart data
+    int   ble_connection_type;
+    int   schedule_loop_priority;
+    int   avrcp_bip_power;
+}bt_sw_cfg_t;
+
+int brt_bt_main(void);
+
+/*!
+    \brief:  initialise bluetooth stack
+    \param hw_cfg:  hardware configuration
+     \param sw_cfg:  software configuration
+*/
+int brlinkd_stack_init(const bt_hw_cfg_t *hw_cfg,const bt_sw_cfg_t *sw_cfg);
+
+/*!
+    \brief:  brlink main loop , running in a standalone task
+*/
+void brlinkd_stack_run(void);
+
+
+/*!
+    \brief:  push mic data to bt send buffer.
+
+    \param *buffer: data to Send
+            length: data length. 120 bytes default.
+     \return: sent data length
+*/
+typedef void (* bt_event_callback)(char * cAtStr);
+int brtbt_send_at_command(char * cAtCmd, unsigned short length);
+void brtbt_register_event_cb(void *ctx, bt_event_callback cb);
+int brtbt_push_mic_data(unsigned char *mic_buf, unsigned short length);
+void brtbt_register_pcm_interface(void *itfc);
+
+int clcast_ble_is_active(void);
+int clcast_ble_notify(const uint8_t *data, uint16_t len);
+int clcast_ble_set_read_value(const uint8_t *data, uint16_t len);
+#endif

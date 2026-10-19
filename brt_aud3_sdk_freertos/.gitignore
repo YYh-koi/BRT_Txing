@@ -1,0 +1,39 @@
+# IAR build outputs
+brlink/Exe/
+brlink/List/
+brlink/Obj/
+settings/
+
+# IDE files
+*.ewp
+*.eww
+*.dep
+*.crun
+*.dbgdt
+*.dnx
+*.cspy.bat
+*.cspy.ps1
+*.driver.xcl
+*.general.xcl
+
+# Linux build outputs
+linux/brlinkd/
+linux/portings/
+
+# Object files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+
+# Temp files
+*~
+*.swp
+*.bak
+*.orig
+
+# Git
+.git/

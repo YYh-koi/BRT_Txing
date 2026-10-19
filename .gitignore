@@ -1,0 +1,12 @@
+# IAR build output directories
+amt630hv100-freertos/proj/AWTK/
+amt630hv100-freertos/proj/Debug/
+amt630hv100-freertos/proj/LVGL/
+amt630hv100-freertos/proj/brlink/
+
+# IAR dependency / intermediate files
+*.dep
+*.pbi
+*.pbd
+*.wsp
+*.wsd

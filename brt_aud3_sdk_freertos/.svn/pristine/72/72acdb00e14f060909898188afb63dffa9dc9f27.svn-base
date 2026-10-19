@@ -1,0 +1,373 @@
+#ifndef _APP_RFCOMM_H_
+#define _APP_RFCOMM_H_
+#include "btdatatype.h"
+#include <string.h>
+#include "btlist.h"
+#ifndef CONFIG_SPP_ANDROID
+#include "bt_event.h"
+#else
+#include "bt_bluedroid_types.h"
+#endif
+
+extern profile_t g_spp_profile;
+
+/*
+this header file is orginated from android/hardware/libhardware/include/hardware/bt_socket.h
+*/
+enum {
+    ST_SPP_INIT,
+    ST_SPP_READY,
+    ST_SPP_CONNECTING,
+    ST_SPP_DISCONNECTING,
+    ST_SPP_CONNECTED,
+    ST_SPP_END,
+};
+
+enum {
+    ST_RFCOMM_INIT,
+    ST_RFCOMM_READY,
+    ST_RFCOMM_CONNECTING,
+    ST_RFCOMM_DISCONNECTING,
+    ST_RFCOMM_CONNECTED,
+    ST_RFCOMM_END,
+};
+
+#ifdef CONFIG_SPP_ANDROID
+#define APP_RFC_BTSOCK_FLAG_ENCRYPT 1
+#define APP_RFC_BTSOCK_FLAG_AUTH (1 << 1)
+
+typedef enum {
+    BTSOCK_RFCOMM = 1,
+    BTSOCK_SCO = 2,
+    BTSOCK_L2CAP = 3
+} app_rfc_btsock_type_t;
+
+/** Represents the standard BT SOCKET interface. */
+typedef struct {
+    short size;
+    bt_bdaddr_t bd_addr;
+    int channel;
+    int status;
+} __attribute__((packed)) app_rfc_sock_connect_signal_t;
+#endif
+
+typedef unsigned char APP_RFC_BOOL; 
+#define APP_RFC_TRUE (1)
+#define APP_RFC_FALSE (0)
+
+#define INVALID_RFC_HANDLE (-1)
+#define INVALID_RFC_CHN (-1)
+
+#define MAX_RFC_SERVER_NAME_LEN (20)
+
+typedef enum {
+	rfc_status_success, //local rfc client connect success
+	rfc_status_fail, //local rfc client connect fail 
+	rfc_server_status_success, //local rfc server connect success
+	rfc_server_status_fail, //local rfc server connect fail 
+}rfc_status_t;
+
+/** Callback invoked in response to register_client */
+typedef void (*rfc_start_server_callback)(int status, void* server_info,UINT8 is_server);
+typedef void (*rfc_stop_server_callback)(int status,void* server_info);
+typedef void (*rfc_connect_callback)(int socket_fd,void* conn_info, int status,UINT8 is_server);
+typedef void (*rfc_disconnect_callback)(UINT8 *bd,void* conn_info, int status,UINT8 is_server);
+typedef void (*rfc_send_callback)(UINT8 *bd, UINT32 handle, int status);
+typedef void (*rfc_receive_callback)(UINT8 *bd, UINT32 handle, unsigned char *data);
+
+typedef struct {
+	rfc_start_server_callback start_server_cb;
+	rfc_stop_server_callback stop_server_cb;
+	rfc_connect_callback connect_cb;
+	rfc_disconnect_callback disconnect_cb;
+	rfc_send_callback send_cb;
+	rfc_receive_callback receive_cb;
+}rfc_callbacks_t;
+
+typedef enum {
+	rfc_conn_state_disconnected,
+	rfc_conn_state_connecting,
+	rfc_conn_state_connected,
+	rfc_conn_state_disconnecting, 
+}rfc_conn_state_t;
+
+typedef enum {
+	rfc_conn_role_client = 1,
+	rfc_conn_role_server
+}rfc_conn_role_t;
+
+/*
+only one spp rfcomm connection  to one remote device allowed.
+*/
+typedef struct {
+	UINT8 	bd[BD_ADDR_LEN]; //remote bd address.
+	rfc_conn_state_t conn_state;
+	UINT8 	server_channel;
+	/* 
+	the connection handle is unique in the scope of all remote device. 
+	RFCOMM connection handle, formed by L2CAP CID and DLCI.
+	DLCI is in the scope of one remote device. 
+	L2CAP CID is allocated in the scope of all remote device. 
+	*/
+	UINT32	handle;	/* RFCOMM connection handle, formed by L2CAP CID and DLCI */
+	UINT16 	mfs;
+	UINT16	credit_incoming;	/* and give init_credit? */
+	UINT16	credit_outgoing;
+	
+	/* service class uuid  */
+	UINT8 rfc_srv_uuid128[16]; 
+
+	rfc_conn_role_t 	role;//local rfcomm connection role.
+
+}rfc_connection_info_t;
+
+#if 1	/* add by cuifaxing */
+typedef struct {
+	
+	UINT8 	bd[BD_ADDR_LEN]; //remote bd address.
+	rfc_conn_state_t conn_state;
+	UINT8 	server_channel;
+	/* 
+	the connection handle is unique in the scope of all remote device. 
+	RFCOMM connection handle, formed by L2CAP CID and DLCI.
+	DLCI is in the scope of one remote device. 
+	L2CAP CID is allocated in the scope of all remote device. 
+	*/
+	UINT32	handle;	/* RFCOMM connection handle, formed by L2CAP CID and DLCI */
+//	UINT32   socket_fd;
+	
+//	rfc_conn_role_t 	role;//local rfcomm connection role.
+
+}rfc_con_info_t;
+
+typedef struct {
+	UINT8 status;
+	UINT8 local_server_channel;
+	UINT32 sdp_handle;
+}rfc_srv_info_t;
+#endif
+
+enum {
+        EV_APP_SPP_SERVER_STARTED,
+        EV_APP_SPP_SERVER_STOPPED,
+        EV_APP_SPP_CONNECTING,
+        EV_APP_SPP_CONNECT_RET,
+        EV_APP_SPP_DISCONNECTING,
+        EV_APP_SPP_DISCONNECT_RET,
+        EV_APP_SPP_SEND_DATA_RET,
+        EV_APP_SPP_MAX_FRAME_SIZE,
+        EV_APP_SPP_DATA_IND,
+        EV_APP_SPP_END,
+//};
+//enum {
+        EV_APP_SRV_RFC_SERVER_STARTED,  //10
+        EV_APP_SRV_RFC_SERVER_STOPPED,
+        EV_APP_SRV_RFC_CONNECT_RET,
+        EV_APP_SRV_RFC_DISCONNECT_RET,
+        EV_APP_SRV_RFC_SEND_DATA_RET,
+        EV_APP_SRV_RFC_MAX_FRAME_SIZE,
+        EV_APP_SRV_RFC_DATA_IND,
+        EV_APP_SRV_RFC_END,
+};
+struct app_spp_data_ind_stru {
+       UINT8 bd[BD_ADDR_LEN];
+	UINT32 handle;
+	UINT32 data_len;
+	UINT8 *data;
+};
+
+void app_spp_init(module_event_cbk_t event_cbk);
+
+typedef enum {
+    APP_RFC_SERVER_START_EX,
+    APP_RFC_SERVER_STOP_EX,
+    
+    APP_RFC_SERVER_START,
+    APP_RFC_SERVER_STOP,
+    
+    APP_RFC_CONNECT_EX,
+    APP_RFC_CONNECT_CHANNEL,
+    APP_RFC_CONNECT,
+    
+    APP_RFC_DISCONNECT,
+    
+    APP_RFC_SEND_DATA,
+    
+    APP_RFC_EVENT_COUNT
+} app_rfc_event_t;
+
+enum {
+    CP_INFO_VID,
+    CP_INFO_PID,
+    CP_INFO_VER,
+};
+
+typedef struct {
+	int msg_id;
+	UINT32 channel;
+	char * srv_name[MAX_RFC_SERVER_NAME_LEN+1];
+	UINT8 srv_uuid[16];
+}msg_rfc_server_start_ex_t;
+
+typedef struct {
+	int msg_id;
+	DWORD rfc_srv_sdp_handle;
+}msg_rfc_server_stop_t;
+
+typedef struct {
+	int msg_id;
+	int socket_fd;
+	UINT8 bd_addr[6];
+	UINT8 uuid_128[16];
+}msg_rfc_connect_ex_t;
+
+typedef struct {
+	int msg_id;
+	int socket_fd;
+	UINT8 bd_addr[6];
+	UINT8 channel; /* remote server channel. */
+}msg_rfc_connect_channel_t;
+
+typedef struct {
+	int msg_id;
+	UINT8 bd_addr[6];
+}msg_rfc_app_connect_t;
+
+typedef struct {
+	int  msg_id;
+	UINT32 handle;
+}msg_rfc_disconnect_t;
+
+typedef struct {
+	int msg_id;
+	UINT32 handle;
+	struct BuffStru *data;
+}msg_rfc_send_data_t;
+
+
+typedef struct 
+{
+	/* service rfcomm channel. 0xff means no server channel is registered. */
+	UINT8 rfc_srv_channel;
+	/* service class uuid  */
+	UINT8 rfc_srv_uuid128[16]; 
+	/* service record handle. 0x0 means no sdp record is registered.  */
+	DWORD rfc_srv_sdp_handle; 
+	/* service name */
+	CHAR rfc_srv_name[MAX_RFC_SERVER_NAME_LEN+1]; 
+	/*	server channel state (not sdp record state).
+	0: unreg, 1: reg-ing, 2: reg-ed, 3: unreg-ing 
+	*/
+	UINT8 rfc_srv_reg_state;
+
+	/* element is rfc_connection_info_t */
+	struct ListStru rfc_conn_list;
+}rfc_server_info_t;
+/*
+	struct to map rfcomm server channel to connect context that initiating rfcomm connection.
+*/
+typedef struct 
+{	
+	UINT8 bd[6];
+	UINT8 server_channel; 
+	/* service class uuid  */
+	UINT8 rfc_srv_uuid128[16]; 
+	int context; /* this context is a socket fd passed in from app_spp_connect_ex */
+}map_channel_to_context_t;
+typedef struct 
+{
+    int socket_fd;
+    int server_channle_cnt;
+    UINT8 bd_addr[6];
+    UINT8 server_channel[30];
+    UINT8 uuid_128[16];
+}rfc_sdp_context_info_t;
+
+struct spp_connect_info_str {
+    UINT8 bd_addr[BD_ADDR_LEN];
+    UINT32 handle;
+    UINT8 status;
+};
+/* shall not be used.  */
+void app_spp_server_start(void);
+/* shall not be used. */
+void app_spp_server_stop(void);
+/*shall not be used */
+void app_spp_connect(UINT8* bd_addr);
+
+/*
+
+Param: 
+	channel: server channel. its range is 1-30.
+		     the channel shall be get int app_spp_get_server_channel(void)
+		     we can assume this channel has not been allocated.
+		
+	srv_uuid_128bit: 16 bytes service class uuid in the sdp record. 
+	
+Return:	
+	return the sdp_handle of this service in callback.
+	sdp_handle is used to stop this service.
+*/
+void app_spp_server_start_ex(UINT32 channel, char * srv_name, UINT8 *srv_uuid_128bit);
+void app_spp_server_stop_ex(DWORD rfc_srv_sdp_handle);
+
+/*
+Description:
+	Connection SPP Serivce's rfcomm server channel.
+Param:
+	context: param in connect_cb.
+	uuid_128: 16 bytes uuid.
+*/
+void app_spp_connect_ex(int context, UINT8* bd_addr, UINT8 *uuid_128);
+void app_spp_disconnect(UINT8*bd,UINT32 handle);
+
+/*
+Description:
+	befor sending data the caller shall call app_spp_get_out_credit to check if there is remaining credit
+	and call app_spp_get_mfs to get the maxium frame size.
+*/
+void app_spp_send_data(UINT32 handle, struct BuffStru *data);
+
+int app_spp_get_out_credit(UINT32 handle);
+int app_spp_credit_decrement(UINT32 handle);
+UINT16 app_spp_get_mfs(UINT32 handle);
+void hlp_unregister_rfcomm_server_channel(UINT8 srv_channel);
+/*
+Description:
+	get a local rfcomm server channel not registered;
+	
+*/
+#include "sdap_uistru.h"
+
+int app_spp_get_server_channel(void);
+/*For Sunplus*/
+UINT32 app_spp_get_handle(void);
+void app_spp_set_handle(UINT32 handle);
+void hlp_spp_set_status(UINT8 state);
+UINT8 hlp_spp_get_status(void);
+UINT32 app_rfc_get_handle_by_address(UINT8* bd_addr);
+UINT32 app_rfc_get_other_handle_by_address(UINT8* bd_addr, UINT32	cmp_handle);
+UINT32 app_rfc_get_handle_by_uuid(UINT8* puuid);
+UINT8* app_rfc_get_address_by_handle(UINT32 handle);
+UINT8* app_rfc_get_srv_uuid_by_handle(UINT32 handle);
+UINT32 app_rfc_srv_get_head_handle();
+UINT8 app_rfc_srv_get_connect_count();
+rfc_server_info_t* app_rfc_srv_get_by_channel(int channel);
+UINT32 app_rfc_get_srv_sdp_handle_by_uuid(UINT8* puuid);
+int get_rfcomm_dis_timer(UINT8 *bd);
+void app_init_cp_vendor_info(UINT8 type, UINT16 value);
+void app_rfc_server_disconnect(UINT32 handle);
+void hlp_uuid_trans_b_to_a(struct SDAP_UUIDStru* uuidStru, UINT8 *srv_uuid);
+void app_spp_disconnect_rfcomm(UINT8*bd, UINT32 handle);
+void event_spp_server_indication(unsigned int event, void *param);
+void event_spp_indication(unsigned int event, void *param);
+rfc_connection_info_t * hlp_rfc_conn_info_get_by_hdl(UINT32 handle);
+
+UINT32 app_get_aa_conn_handle();
+UINT32 app_get_iap2_conn_handle();
+UINT8* app_get_aa_conn_address();
+UINT8* app_get_iap2_conn_address();
+UINT8 is_iap2_uuid(UINT8 *uuid128);
+UINT8 is_aa_uuid(UINT8 *uuid128);
+#endif
+

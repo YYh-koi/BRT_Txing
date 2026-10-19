@@ -1,0 +1,246 @@
+/******************************************************************************
+ *
+ *  Copyright (C) 2009-2012 Realtek Corporation
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at:
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+/******************************************************************************
+ *
+ *  Filename:      userial_vendor.c
+ *
+ *  Description:   Contains vendor-specific userial functions
+ *
+ ******************************************************************************/
+#undef NDEBUG
+#define LOG_TAG "bt_userial_vendor"
+
+#ifdef CONFIG_OS_ANDROID
+#include <utils/Log.h>
+#endif
+//#include <termios.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include "bt_vendor_rtk.h"
+#include "userial_vendor.h"
+#include "porting.h"
+#include "porting_utils.h"
+#include "brlinkd.h"
+
+/******************************************************************************
+**  Constants & Macros
+******************************************************************************/
+
+#ifndef VNDUSERIAL_DBG
+#define VNDUSERIAL_DBG TRUE
+#endif
+
+#if (VNDUSERIAL_DBG == TRUE)
+#define VNDUSERIALDBG(param, ...) {ALOGD(param, ## __VA_ARGS__);}
+#else
+#define VNDUSERIALDBG(param, ...) {}
+#endif
+
+#define VND_PORT_NAME_MAXLEN    256
+
+#ifndef BT_CHIP_HW_FLOW_CTRL_ON
+#define BT_CHIP_HW_FLOW_CTRL_ON TRUE
+#endif
+
+/******************************************************************************
+**  Local type definitions
+******************************************************************************/
+
+/* vendor serial control block */
+
+/******************************************************************************
+**  Static variables
+******************************************************************************/
+
+static UartPort_t *vendor_uap;
+
+#define CSIZE	0x0003
+#define   CS8	0x0000
+#define   CS6	0x0001
+#define   CS7	0x0002
+#define   CS5	0x0003
+#define CSTOPB	0x0004
+#define PARENB	0x0010
+#define PARODD	0x0020
+#define CMSPAR	0x0100	/* mark or space (stick) parity */
+#define CRTSCTS	0x0200	/* flow control */
+
+
+/*****************************************************************************
+**   Helper Functions
+*****************************************************************************/
+
+/*******************************************************************************
+**
+** Function        userial_to_tcio_baud
+**
+** Description     helper function converts USERIAL baud rates into TCIO
+**                  conforming baud rates
+**
+** Returns         TRUE/FALSE
+**
+*******************************************************************************/
+uint8_t userial_to_tcio_baud(uint8_t cfg_baud, uint32_t *baud)
+{
+	return TRUE;
+}
+
+#if (BT_WAKE_VIA_USERIAL_IOCTL==TRUE)
+/*******************************************************************************
+**
+** Function        userial_ioctl_init_bt_wake
+**
+** Description     helper function to set the open state of the bt_wake if ioctl
+**                  is used. it should not hurt in the rfkill case but it might
+**                  be better to compile it out.
+**
+** Returns         none
+**
+*******************************************************************************/
+void userial_ioctl_init_bt_wake(int fd)
+{
+	uint32_t bt_wake_state;
+
+	/* assert BT_WAKE through ioctl */
+	ioctl(fd, USERIAL_IOCTL_BT_WAKE_ASSERT, NULL);
+	ioctl(fd, USERIAL_IOCTL_BT_WAKE_GET_ST, &bt_wake_state);
+	VNDUSERIALDBG("userial_ioctl_init_bt_wake read back BT_WAKE state=%i", \
+	              bt_wake_state);
+}
+#endif // (BT_WAKE_VIA_USERIAL_IOCTL==TRUE)
+
+
+/*****************************************************************************
+**   Userial Vendor API Functions
+*****************************************************************************/
+
+/*******************************************************************************
+**
+** Function        userial_vendor_init
+**
+** Description     Initialize userial vendor-specific control block
+**
+** Returns         None
+**
+*******************************************************************************/
+void userial_vendor_init(void)
+{
+
+}
+
+/*******************************************************************************
+**
+** Function        userial_vendor_open
+**
+** Description     Open the serial port with the given configuration
+**
+** Returns         device fd
+**
+*******************************************************************************/
+UartPort_t *userial_vendor_open(uint32_t userial_baud)
+{
+	vendor_uap = xUartOpen(hw_get_uartport());
+	if (vendor_uap != NULL) {
+		if(hw_get_bt_module() == BRT_MODULE_CHIP_RTL) {
+			vUartInit(vendor_uap, userial_baud, CS8|PARENB);
+		} else {
+			vUartInit(vendor_uap, userial_baud, CS8);
+		}
+	}
+	return vendor_uap;
+}
+
+/*******************************************************************************
+**
+** Function        userial_vendor_close
+**
+** Description     Conduct vendor-specific close work
+**
+** Returns         None
+**
+*******************************************************************************/
+void userial_vendor_close(void)
+{
+	vUartClose(vendor_uap);
+}
+
+/*******************************************************************************
+**
+** Function        userial_vendor_set_baud
+**
+** Description     Set new baud rate
+**
+** Returns         None
+**
+*******************************************************************************/
+void userial_vendor_set_baud(uint32_t userial_baud)
+{
+	if (vendor_uap != NULL) {
+		if(hw_get_bt_module() == BRT_MODULE_CHIP_RTL) {
+			vUartInit(vendor_uap, userial_baud, CS8|PARENB);
+		} else {
+			vUartInit(vendor_uap, userial_baud, CS8);
+		}
+	}
+}
+
+/*******************************************************************************
+**
+** Function        userial_vendor_ioctl
+**
+** Description     ioctl inteface
+**
+** Returns         None
+**
+*******************************************************************************/
+void userial_vendor_ioctl(userial_vendor_ioctl_op_t op, void *p_data)
+{
+	
+}
+
+/*******************************************************************************
+**
+** Function        userial_set_port
+**
+** Description     Configure UART port name
+**
+** Returns         0 : Success
+**                 Otherwise : Fail
+**
+*******************************************************************************/
+int userial_set_port(char *p_conf_name, char *p_conf_value, int param)
+{
+	return 0;
+}
+
+/*******************************************************************************
+**
+** Function        userial_vendor_set_hw_fctrl
+**
+** Description     Conduct vendor-specific close work
+**
+** Returns         None
+**
+*******************************************************************************/
+void userial_vendor_set_hw_fctrl(uint8_t hw_fctrl)
+{
+
+}

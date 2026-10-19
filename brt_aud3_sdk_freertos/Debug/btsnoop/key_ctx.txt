@@ -1,0 +1,581 @@
+====================================================================================================
+FILE : btsnoop_hci_260911_105904.log
+信息 : records=6385  时长=393.9s  方向: TX=手机发出  RX=仪表发来
+====================================================================================================
+
+HID 按键(按下)次数: 7    按下/松开总帧: 14
+AVRCP 元数据帧: 374   播放状态帧: 375   通知帧: 498   PASS-THROUGH: 0
+HID 异常帧(Handshake/SET_*/SUSPEND): 0 (无)
+
+----------------------------------------------------------------------------------------------------
+[按键 #1]  NEXT  @ 194.697 s (帧 #2772)  payload=A1 02 02
+          松开 @ 194.794 s (帧 #2773)
+  按下前最后一条元数据: title='Not Provided'                 artist='Unavailable'    len=0 @ 194.021 (#2754)
+  --- 窗口 [189.697, 199.697] ---
+      192.786 #2699  RX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=NOTIFY params=01 00 00 00 00
+      192.792 #2701  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=INTERIM params=01 02
+      192.829 #2707  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      192.834 #2708  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      192.876 #2710  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      192.880 #2711  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 00 00
+      193.387 #2730  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=REJECTED params=01
+      193.390 #2731  TX  GetPlayStatus len=0        pos=0        status=PAUSED
+      194.021 #2754  TX  GetElemAttr   title='Not Provided'                 artist='Unavailable'    len=0
+      194.697 #2772  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      194.794 #2773  RX  HIDP DATA Input report=2 val=0x00 (release)
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)  [注意: 前值缺失('Not Provided'), 该判定仅供参考]
+
+----------------------------------------------------------------------------------------------------
+[按键 #2]  NEXT  @ 224.353 s (帧 #3282)  payload=A1 02 02
+          松开 @ 224.400 s (帧 #3283)
+  按下前最后一条元数据: title='我喜欢'                          artist='梁静茹'            len=292213 @ 223.940 (#3273)
+  --- 窗口 [219.353, 229.353] ---
+      219.662 #3203  TX  GetElemAttr   title='我喜欢'                          artist='梁静茹'            len=292213
+      219.690 #3205  TX  GetPlayStatus len=1970603008 pos=2570911744 status=PAUSED
+      220.321 #3213  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 40 0C
+      220.485 #3215  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      220.527 #3216  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 40 D3
+      221.582 #3230  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 44 E4
+      221.690 #3232  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      221.736 #3233  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 45 8A
+      222.771 #3247  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 49 9D
+      222.965 #3255  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      222.995 #3256  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 4A 83
+      224.021 #3277  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 4E 87
+      224.175 #3279  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      224.202 #3280  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 4F 3D
+      224.353 #3282  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      224.400 #3283  RX  HIDP DATA Input report=2 val=0x00 (release)
+      225.239 #3299  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 53 3F
+      225.359 #3301  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      225.412 #3302  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 53 DE
+      226.457 #3316  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 57 F9
+      226.634 #3318  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      226.679 #3319  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 58 D9
+      227.717 #3333  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 5C EC
+      227.865 #3341  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      227.916 #3342  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 5D A7
+      228.954 #3357  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 61 C1
+      229.071 #3359  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      229.113 #3360  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 62 5D
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #3]  NEXT  @ 254.345 s (帧 #3825)  payload=A1 02 02
+          松开 @ 254.388 s (帧 #3827)
+  按下前最后一条元数据: title='我喜欢'                          artist='梁静茹'            len=292213 @ 254.124 (#3821)
+  --- 窗口 [249.345, 259.345] ---
+      249.480 #3750  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 B1 E5
+      249.591 #3752  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      249.642 #3753  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 B2 86
+      249.827 #3757  TX  GetElemAttr   title='我喜欢'                          artist='梁静茹'            len=292213
+      249.858 #3759  TX  GetPlayStatus len=1970603008 pos=1857224704 status=PAUSED
+      250.693 #3768  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 B6 9F
+      250.801 #3770  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      250.846 #3771  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 B7 3F
+      251.889 #3785  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 BB 53
+      252.094 #3793  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      252.137 #3794  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 BC 4C
+      253.167 #3808  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 C0 5E
+      253.292 #3810  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      253.327 #3811  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 C0 FB
+      254.345 #3825  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      254.371 #3826  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 C5 03
+      254.388 #3827  RX  HIDP DATA Input report=2 val=0x00 (release)
+      254.491 #3829  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      254.546 #3830  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 C5 AA
+      255.600 #3845  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 C9 C7
+      255.746 #3852  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      255.790 #3853  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 CA 90
+      256.839 #3870  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 CE A2
+      257.015 #3873  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      257.077 #3874  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 CF 86
+      258.122 #3889  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 D3 AB
+      258.227 #3891  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      258.274 #3892  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 D4 41
+      259.313 #3907  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 D8 56
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #4]  NEXT  @ 284.490 s (帧 #4318)  payload=A1 02 02
+          松开 @ 284.491 s (帧 #4319)
+  按下前最后一条元数据: title='我喜欢'                          artist='梁静茹'            len=292213 @ 284.266 (#4314)
+  --- 窗口 [279.490, 289.490] ---
+      279.492 #4239  TX  GetElemAttr   title='我喜欢'                          artist='梁静茹'            len=292213
+      279.527 #4241  TX  GetPlayStatus len=1970603008 pos=1361510656 status=PAUSED
+      280.124 #4249  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 29 AF
+      280.241 #4251  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      280.283 #4252  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 2A 3F
+      281.326 #4267  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 2E 4F
+      281.443 #4269  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      281.494 #4270  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 2E F1
+      282.541 #4284  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 33 0B
+      282.730 #4291  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      282.776 #4293  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 33 F9
+      283.799 #4307  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 38 0C
+      283.956 #4309  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      284.018 #4310  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 38 C3
+      284.490 #4318  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      284.491 #4319  RX  HIDP DATA Input report=2 val=0x00 (release)
+      285.063 #4326  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 3C E7
+      285.199 #4328  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      285.259 #4329  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 3D 9F
+      286.303 #4343  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 41 BF
+      286.510 #4352  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      286.551 #4353  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 42 BC
+      287.604 #4367  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 46 CC
+      287.719 #4369  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      287.764 #4370  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 47 75
+      288.804 #4384  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 4B 89
+      288.908 #4386  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      288.949 #4387  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 4C 1A
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #5]  NEXT  @ 314.355 s (帧 #4829)  payload=A1 02 02
+          松开 @ 314.393 s (帧 #4830)
+  按下前最后一条元数据: title='天生刺猬'                         artist='张月'             len=168685 @ 314.024 (#4825)
+  --- 窗口 [309.355, 319.355] ---
+      309.537 #4768  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      310.513 #4774  TX  GetElemAttr   title='天生刺猬'                         artist='张月'             len=168685
+      310.755 #4778  TX  GetPlayStatus len=3985768960 pos=0        status=PAUSED
+      314.355 #4829  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      314.393 #4830  RX  HIDP DATA Input report=2 val=0x00 (release)
+      316.834 #4873  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=CHANGED params=01 02
+      316.912 #4875  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 00 C8
+      316.979 #4877  RX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=NOTIFY params=01 00 00 00 00
+      317.051 #4879  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      317.370 #4886  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=INTERIM params=01 02
+      317.553 #4888  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 00 C8
+      318.929 #4904  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 04 AA
+      319.146 #4910  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      319.272 #4915  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 06 0F
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #6]  NEXT  @ 344.432 s (帧 #5328)  payload=A1 02 02
+          松开 @ 344.472 s (帧 #5329)
+  按下前最后一条元数据: title='天生刺猬'                         artist='张月'             len=168685 @ 344.210 (#5324)
+  --- 窗口 [339.432, 349.432] ---
+      339.498 #5249  TX  GetElemAttr   title='天生刺猬'                         artist='张月'             len=168685
+      339.533 #5251  TX  GetPlayStatus len=3985768960 pos=1196752896 status=PAUSED
+      339.995 #5253  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 57 15
+      340.135 #5261  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      340.185 #5262  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 57 C9
+      341.222 #5276  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 5B E0
+      341.333 #5278  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      341.386 #5279  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 5C 75
+      342.430 #5293  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 60 91
+      342.541 #5295  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      342.599 #5296  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 61 2D
+      343.639 #5311  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 65 4F
+      343.784 #5319  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      343.837 #5320  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 66 08
+      344.432 #5328  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      344.472 #5329  RX  HIDP DATA Input report=2 val=0x00 (release)
+      344.737 #5334  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+      344.767 #5336  TX  GetElemAttr   title='一半'                           artist='柯基林'            len=168685
+      344.868 #5341  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      344.906 #5345  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 6A 4B
+      344.988 #5347  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      345.123 #5349  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      345.159 #5350  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 6B 42
+      345.314 #5353  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=CHANGED params=01 02
+      345.349 #5356  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 00 00
+      345.479 #5362  RX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=NOTIFY params=01 00 00 00 00
+      345.589 #5363  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+      345.646 #5365  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=INTERIM params=01 02
+      345.674 #5366  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      345.704 #5368  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 00 00
+      345.742 #5370  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      345.833 #5371  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      345.946 #5374  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+      346.049 #5377  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      346.065 #5378  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 00 94
+      346.090 #5380  TX  GetElemAttr   title='一半'                           artist='柯基林'            len=142190
+      346.117 #5382  TX  GetPlayStatus len=1848312320 pos=3372220416 status=PAUSED
+      346.196 #5384  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      346.197 #5385  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      346.225 #5386  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 01 35
+      347.256 #5401  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 05 39
+      347.360 #5404  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      347.390 #5405  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 05 C1
+      348.423 #5419  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 09 C6
+      348.539 #5421  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      348.581 #5422  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 0A 5C
+  >>> 判定: 生效   (曲目元数据在 +0.3s 变化: 天生刺猬 -> 一半)
+      佐证: TRACK_CHANGED 通知 9 条 ['@344.737 #5334 CHANGED', '@344.868 #5341 NOTIFY', '@344.988 #5347 INTERIM', '@345.589 #5363 CHANGED', '@345.742 #5370 NOTIFY', '@345.833 #5371 INTERIM', '@345.946 #5374 CHANGED', '@346.049 #5377 NOTIFY', '@346.196 #5384 INTERIM']
+
+----------------------------------------------------------------------------------------------------
+[按键 #7]  NEXT  @ 374.452 s (帧 #5900)  payload=A1 02 02
+          松开 @ 374.586 s (帧 #5902)
+  按下前最后一条元数据: title='一半'                           artist='柯基林'            len=142190 @ 374.208 (#5894)
+  --- 窗口 [369.452, 379.452] ---
+      369.460 #5813  TX  GetElemAttr   title='一半'                           artist='柯基林'            len=142190
+      369.488 #5815  TX  GetPlayStatus len=1848312320 pos=308019200 status=PAUSED
+      369.569 #5817  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 5C 59
+      369.727 #5826  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      369.768 #5827  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 5D 20
+      370.810 #5841  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 61 30
+      370.938 #5843  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      371.010 #5845  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 61 DC
+      372.042 #5859  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 66 09
+      372.162 #5866  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      372.202 #5867  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 66 A3
+      373.236 #5881  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 6A B2
+      373.360 #5883  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      373.403 #5884  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 6B 51
+      374.433 #5898  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 6F 63
+      374.452 #5900  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      374.549 #5901  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      374.586 #5902  RX  HIDP DATA Input report=2 val=0x00 (release)
+      374.647 #5903  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 6F F6
+      374.658 #5905  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+      374.701 #5910  TX  GetElemAttr   title='晓风残月 (虐版|回西州，回到初见桥头)'         artist='竹小悠'            len=142190
+      374.998 #5916  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      375.098 #5919  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      375.478 #5927  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=CHANGED params=01 02
+      375.507 #5929  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 00 00
+      375.622 #5931  RX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=NOTIFY params=01 00 00 00 00
+      375.699 #5932  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      375.765 #5934  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+      375.795 #5937  TX  RegNotify ev=0x01(PLAY_STATUS_CHANGED) ct=INTERIM params=01 02
+      375.853 #5939  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 00 00
+      375.855 #5940  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      375.880 #5942  TX  GetElemAttr   title='晓风残月 (虐版|回西州，回到初见桥头)'         artist='竹小悠'            len=237000
+      375.909 #5943  TX  GetPlayStatus len=3365733120 pos=0        status=PAUSED
+      375.999 #5944  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      376.238 #5951  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+      376.325 #5953  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 00 D2
+      376.398 #5957  TX  GetElemAttr   title='晓风残月 (虐版|回西州，回到初见桥头)'         artist='竹小悠'            len=237720
+      376.429 #5958  TX  GetPlayStatus len=2560623360 pos=956366848 status=PAUSED
+      376.512 #5961  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+      376.537 #5962  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      376.608 #5963  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+      376.636 #5964  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 02 0A
+      377.668 #5981  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 06 10
+      377.785 #5983  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      377.835 #5984  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 06 A7
+      378.881 #5998  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 0A BF
+      379.040 #6006  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      379.077 #6007  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 0B 8D
+  >>> 判定: 生效   (曲目元数据在 +0.2s 变化: 一半 -> 晓风残月 (虐版|回西州，回到初见桥头))
+      佐证: TRACK_CHANGED 通知 9 条 ['@374.658 #5905 CHANGED', '@374.998 #5916 NOTIFY', '@375.098 #5919 INTERIM', '@375.765 #5934 CHANGED', '@375.855 #5940 NOTIFY', '@375.999 #5944 INTERIM', '@376.238 #5951 CHANGED', '@376.512 #5961 NOTIFY', '@376.608 #5963 INTERIM']
+
+----------------------------------------------------------------------------------------------------
+>> 手机自行切歌(不在任何按键 +5s 窗口内) 的元数据变化:
+      202.614 #2896   Not Provided -> 我喜欢
+      306.899 #4730   我喜欢 -> Not Provided
+      308.021 #4752   Not Provided -> 天生刺猬
+
+====================================================================================================
+FILE : btsnoop_hci_260911_111011.log
+信息 : records=6265  时长=364.9s  方向: TX=手机发出  RX=仪表发来
+====================================================================================================
+
+HID 按键(按下)次数: 11    按下/松开总帧: 22
+AVRCP 元数据帧: 668   播放状态帧: 669   通知帧: 549   PASS-THROUGH: 0
+HID 异常帧(Handshake/SET_*/SUSPEND): 0 (无)
+
+----------------------------------------------------------------------------------------------------
+[按键 #1]  NEXT  @ 37.429 s (帧 #1164)  payload=A1 02 02
+          松开 @ 37.487 s (帧 #1165)
+  按下前最后一条元数据: title='我喜欢'                          artist='梁静茹'            len=292213 @ 36.999 (#1153)
+  --- 窗口 [32.429, 42.429] ---
+       32.743 #1089  TX  GetElemAttr   title='我喜欢'                          artist='梁静茹'            len=292213
+       32.772 #1091  TX  GetPlayStatus len=1970603008 pos=2882404608 status=PAUSED
+       32.865 #1092  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 CF 02
+       33.462 #1100  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       33.646 #1103  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 D1 A0
+       34.710 #1117  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 D6 1A
+       34.969 #1123  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       35.030 #1126  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 D7 5D
+       36.077 #1138  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 DB 83
+       36.698 #1146  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       36.739 #1149  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 DE 20
+       37.429 #1164  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+       37.487 #1165  RX  HIDP DATA Input report=2 val=0x00 (release)
+       37.790 #1172  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 E2 30
+       37.893 #1174  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       37.934 #1175  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 E2 C9
+       38.496 #1183  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+       38.520 #1185  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 00 00
+       38.590 #1187  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+       38.596 #1188  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+       38.690 #1190  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       38.697 #1191  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 00 00
+       38.791 #1194  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+       38.837 #1197  TX  GetPlayStatus len=304219136 pos=1560281088 status=PAUSED
+       38.931 #1199  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 01 19
+       39.062 #1201  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       39.065 #1202  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 01 A0
+       39.506 #1210  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=CHANGED params=02 00 00 00 00 00 00 00 00
+       39.580 #1212  RX  RegNotify ev=0x02(TRACK_CHANGED) ct=NOTIFY params=02 00 00 00 00
+       39.695 #1213  TX  RegNotify ev=0x02(TRACK_CHANGED) ct=INTERIM params=02 00 00 00 00 00 00 00 00
+       40.095 #1221  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 05 8B
+       40.202 #1223  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       40.262 #1224  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 06 15
+       41.294 #1238  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 0A 39
+       41.437 #1246  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       41.514 #1248  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 0A E9
+  >>> 判定: 生效   (曲目元数据在 +1.4s 变化: 我喜欢 -> 坏天气)
+      佐证: TRACK_CHANGED 通知 6 条 ['@38.496 #1183 CHANGED', '@38.590 #1187 NOTIFY', '@38.596 #1188 INTERIM', '@39.506 #1210 CHANGED', '@39.580 #1212 NOTIFY', '@39.695 #1213 INTERIM']
+
+----------------------------------------------------------------------------------------------------
+[按键 #2]  NEXT  @ 67.746 s (帧 #1723)  payload=A1 02 02
+          松开 @ 67.792 s (帧 #1724)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 67.477 (#1716)
+  --- 窗口 [62.746, 72.746] ---
+       62.848 #1644  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+       62.891 #1646  TX  GetPlayStatus len=304219136 pos=2321416192 status=PAUSED
+       63.679 #1654  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 61 97
+       63.799 #1656  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       63.862 #1657  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 62 43
+       64.953 #1677  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 66 A0
+       65.110 #1679  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       65.156 #1680  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 67 61
+       66.215 #1694  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 6B 76
+       66.338 #1697  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       66.382 #1698  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 6C 2D
+       67.439 #1713  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 70 40
+       67.566 #1720  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       67.609 #1721  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 70 FB
+       67.746 #1723  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+       67.792 #1724  RX  HIDP DATA Input report=2 val=0x00 (release)
+       68.642 #1737  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 75 0C
+       68.772 #1739  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       68.828 #1740  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 75 B0
+       69.864 #1757  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 79 CE
+       70.007 #1760  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       70.062 #1762  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 7A 84
+       71.098 #1777  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 7E A1
+       71.238 #1783  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       71.285 #1785  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 7F 52
+       72.333 #1799  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 83 68
+       72.521 #1801  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       72.568 #1802  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 84 54
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #3]  NEXT  @ 97.626 s (帧 #2203)  payload=A1 02 02
+          松开 @ 97.677 s (帧 #2205)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 97.425 (#2199)
+  --- 窗口 [92.626, 102.626] ---
+       92.630 #2123  TX  GetPlayStatus len=304219136 pos=3167879168 status=PAUSED
+       93.124 #2128  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+       93.514 #2133  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 D6 14
+       93.629 #2135  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       93.691 #2137  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 D6 C8
+       94.762 #2152  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 DA EE
+       94.903 #2157  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       94.951 #2159  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 DB C2
+       96.005 #2174  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 DF D9
+       96.108 #2176  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       96.155 #2177  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 E0 78
+       97.213 #2191  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 E4 8E
+       97.321 #2195  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       97.364 #2196  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 E5 35
+       97.626 #2203  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+       97.677 #2205  RX  HIDP DATA Input report=2 val=0x00 (release)
+       98.416 #2210  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 E9 48
+       99.125 #2224  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+       99.162 #2227  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 EC 42
+      100.214 #2240  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 F0 4D
+      100.804 #2248  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      100.850 #2251  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 F2 CF
+      101.895 #2264  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 00 F6 E5
+      102.294 #2271  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      102.348 #2274  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 00 F8 A3
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #4]  NEXT  @ 127.637 s (帧 #2730)  payload=A1 02 02
+          松开 @ 127.673 s (帧 #2737)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 127.461 (#2726)
+  --- 窗口 [122.637, 132.637] ---
+      122.687 #2616  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      122.719 #2620  TX  GetPlayStatus len=304219136 pos=1212678400 status=PAUSED
+      123.176 #2656  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 4A 07
+      123.328 #2664  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      123.377 #2665  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 4A CC
+      124.418 #2679  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 4E E4
+      124.523 #2681  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      124.586 #2682  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 4F 77
+      125.635 #2696  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 53 9C
+      125.771 #2698  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      125.813 #2699  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 54 57
+      126.858 #2713  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 58 68
+      127.055 #2721  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      127.097 #2722  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 59 5B
+      127.637 #2730  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      127.673 #2737  RX  HIDP DATA Input report=2 val=0x00 (release)
+      128.134 #2744  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 5D 6B
+      128.261 #2752  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      128.302 #2753  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 5E 11
+      129.346 #2767  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 62 21
+      129.451 #2772  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      129.492 #2773  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 62 B5
+      130.530 #2787  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 66 C6
+      130.665 #2793  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      130.707 #2796  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 67 74
+      131.760 #2811  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 6B 86
+      132.105 #2813  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      132.159 #2814  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 6D 15
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #5]  NEXT  @ 157.557 s (帧 #3226)  payload=A1 02 02
+          松开 @ 157.721 s (帧 #3230)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 157.545 (#3225)
+  --- 窗口 [152.557, 162.557] ---
+      152.709 #3150  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      152.770 #3152  TX  GetPlayStatus len=304219136 pos=2394751232 status=PAUSED
+      152.884 #3155  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 BE 1D
+      153.054 #3157  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      153.089 #3158  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 BE EA
+      154.119 #3172  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 C2 F3
+      154.234 #3174  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      154.269 #3175  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 C3 85
+      155.306 #3189  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 C7 8F
+      155.485 #3197  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      155.531 #3198  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 C8 68
+      156.561 #3212  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 CC 7D
+      156.673 #3214  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      156.703 #3215  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 CD 0C
+      157.557 #3226  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      157.721 #3230  RX  HIDP DATA Input report=2 val=0x00 (release)
+      157.744 #3231  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 D1 11
+      157.846 #3233  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      157.883 #3235  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 D1 A2
+      158.912 #3249  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 D5 AD
+      159.129 #3257  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      159.163 #3258  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 D6 A4
+      160.192 #3272  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 DA AC
+      160.332 #3274  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      160.364 #3275  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 DB 57
+      161.399 #3289  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 01 DF 5F
+      161.514 #3291  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      161.549 #3292  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 01 DF F6
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #6]  NEXT  @ 187.469 s (帧 #3762)  payload=A1 02 02
+          松开 @ 187.601 s (帧 #3765)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 186.988 (#3757)
+  --- 窗口 [182.469, 192.469] ---
+      182.680 #3652  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 32 81
+      182.760 #3689  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      182.789 #3691  TX  GetPlayStatus len=304219136 pos=4046586368 status=PAUSED
+      182.855 #3693  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      182.886 #3694  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 33 52
+      183.914 #3709  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 37 58
+      184.054 #3711  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      184.088 #3712  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 38 00
+      185.117 #3726  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 3C 0A
+      185.228 #3728  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      185.256 #3729  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 3C 96
+      186.275 #3744  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 40 9A
+      186.392 #3746  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      186.409 #3747  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 41 22
+      187.428 #3761  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 45 1B
+      187.469 #3762  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      187.574 #3764  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      187.601 #3765  RX  HIDP DATA Input report=2 val=0x00 (release)
+      187.608 #3766  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 45 C1
+      188.636 #3780  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 49 CA
+      188.836 #3788  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      188.858 #3789  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 4A AF
+      189.891 #3808  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 4E AB
+      190.034 #3810  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      190.069 #3811  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 4F 5C
+      191.101 #3825  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 53 68
+      191.199 #3827  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      191.236 #3828  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 53 EC
+      192.265 #3844  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 57 F6
+      192.379 #3847  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      192.412 #3848  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 58 86
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #7]  NEXT  @ 217.466 s (帧 #4248)  payload=A1 02 02
+          松开 @ 217.505 s (帧 #4249)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 217.227 (#4244)
+  --- 窗口 [212.466, 222.466] ---
+      212.516 #4168  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      212.543 #4169  TX  GetPlayStatus len=304219136 pos=765919744 status=PAUSED
+      212.738 #4172  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 A7 EC
+      212.847 #4174  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      212.882 #4175  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 A8 7A
+      213.912 #4189  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 AC 84
+      214.009 #4191  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      214.039 #4192  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 AD 04
+      215.074 #4207  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 B1 09
+      215.254 #4215  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      215.283 #4216  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 B1 E1
+      216.301 #4230  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 B5 E6
+      216.516 #4232  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      216.535 #4233  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 B6 CF
+      217.466 #4248  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      217.505 #4249  RX  HIDP DATA Input report=2 val=0x00 (release)
+      217.563 #4250  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 BA CA
+      217.853 #4258  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      217.881 #4259  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 BC 08
+      218.909 #4273  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 C0 0B
+      219.091 #4275  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      219.126 #4276  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 C0 DE
+      220.163 #4290  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 C4 E8
+      220.261 #4292  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      220.290 #4293  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 C5 70
+      221.329 #4307  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=CHANGED params=05 00 02 C9 77
+      221.475 #4315  RX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=NOTIFY params=05 00 00 00 01
+      221.511 #4317  TX  RegNotify ev=0x05(PLAY_POS_CHANGED) ct=INTERIM params=05 00 02 CA 2E
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #8]  NEXT  @ 247.474 s (帧 #4733)  payload=A1 02 02
+          松开 @ 247.512 s (帧 #4734)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 247.273 (#4729)
+  --- 窗口 [242.474, 252.474] ---
+      242.543 #4618  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      242.570 #4620  TX  GetPlayStatus len=304219136 pos=2716271104 status=PAUSED
+      247.474 #4733  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      247.512 #4734  RX  HIDP DATA Input report=2 val=0x00 (release)
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #9]  NEXT  @ 277.563 s (帧 #5089)  payload=A1 02 02
+          松开 @ 277.599 s (帧 #5090)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 277.357 (#5085)
+  --- 窗口 [272.563, 282.563] ---
+      272.599 #5030  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      272.627 #5031  TX  GetPlayStatus len=304219136 pos=2716271104 status=PAUSED
+      277.563 #5089  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      277.599 #5090  RX  HIDP DATA Input report=2 val=0x00 (release)
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #10]  NEXT  @ 307.674 s (帧 #5524)  payload=A1 02 02
+          松开 @ 307.719 s (帧 #5525)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 307.488 (#5520)
+  --- 窗口 [302.674, 312.674] ---
+      302.701 #5428  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      302.729 #5429  TX  GetPlayStatus len=304219136 pos=2716271104 status=PAUSED
+      307.674 #5524  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      307.719 #5525  RX  HIDP DATA Input report=2 val=0x00 (release)
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+[按键 #11]  NEXT  @ 337.607 s (帧 #5879)  payload=A1 02 02
+          松开 @ 337.646 s (帧 #5880)
+  按下前最后一条元数据: title='坏天气'                          artist='孙燕姿'            len=270866 @ 337.404 (#5875)
+  --- 窗口 [332.607, 342.607] ---
+      332.654 #5820  TX  GetElemAttr   title='坏天气'                          artist='孙燕姿'            len=270866
+      332.685 #5821  TX  GetPlayStatus len=304219136 pos=2716271104 status=PAUSED
+      337.607 #5879  RX  HIDP DATA Input report=2 val=0x02 (NEXT)
+      337.646 #5880  RX  HIDP DATA Input report=2 val=0x00 (release)
+  >>> 判定: 未生效   (按键后 5s 内手机回报的 Title/Length 没有任何变化)
+
+----------------------------------------------------------------------------------------------------
+>> 手机自行切歌(不在任何按键 +5s 窗口内) 的元数据变化:
+     (无)
+

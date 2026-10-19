@@ -1,0 +1,1669 @@
+#include "btdatatype.h"
+#include "auto_at.h"
+#include <string.h>
+#include <stdlib.h>
+#include <string.h>
+#include "auto_hf.h"
+#include "brt_trace.h"
+#include "debug_utils.h"
+#include "bt_utils.h"
+#include "bt_audio_hw.h"
+#include "auto_at_internal.h"
+#include "auto_pbap.h"
+#include "internal_pbap.h"
+#include "auto_commfunc.h"
+#include "cmd_operations.h"
+#include "hlp_le_advertiser_fsm.h"
+#include "internal_manager.h"
+
+#if 1
+//#include <sys/resource.h>
+#include <unistd.h>
+#include <errno.h>
+#endif
+
+#include <signal.h>
+#include <time.h>
+
+//#include <sys/timerfd.h>
+#include <time.h>
+#include <unistd.h>
+
+BOOL g_bt_opened = FALSE;
+
+int get_usr_adv_data(char *adv_data, int len)
+{
+    return 0;
+}
+
+int d_disable_state = 1;
+
+void bt_check_diable_state()
+{
+    int time_num = 0;
+    bse_log_print("at_command", "\r\n","bt_check_diable_state1 = %d\n", d_disable_state);
+    while(time_num < 10)
+    {
+        bse_log_print("at_command", "\r\n","bt_check_diable_state2 = %d\n", d_disable_state);
+        if(!d_disable_state)
+            break;
+
+        usleep(500000);
+        time_num++;
+    }
+    bse_log_print("at_command", "\r\n","d_disable_state = %d\n", d_disable_state);
+    if(d_disable_state)
+    {
+        //interrupt_handler(11);
+        bse_log_print("at_command", "\r\n","d_disable_state4 = %d\n", d_disable_state);
+    }
+}
+
+static int ATGap(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0,dhindx = 0;
+    /*
+    int sgflag = -1;
+    int  i,com_value_len = 0;
+    char com_value_buff[5][64]={0};
+    char *p = cmd;
+    int com_indx = 0;
+    for(i=0; i<len; i++)
+    {
+        if(p[i] == '=')
+        {
+            sgflag = 1;
+            for(int j=i+1; j<len; j++)
+            {
+                if(p[j] == ',' || p[j] == '\r'|| p[j] == '\n')
+                {
+                    memcpy(com_value_buff[com_indx++], &p[i+1], com_value_len);
+                    com_value_len = 0;
+                }
+                com_value_len++;
+            }
+        }
+    }
+    */
+   //bse_log_print("at_command", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            //bse_log_print("at_command", "\r\n", "AT+=\n");
+            sgflag = 1;
+            dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+    if(strncmp(cmd,"PROFILE",7) == 0)//Bluetooth Profile Selection
+    {
+        char *p = cmd + 8;
+        if(sgflag)
+        {
+            UINT16 profile_value = atoi(p);
+            bse_log_print("at_command", "\r\n", "profile_value = %d\n", profile_value);
+            do_set_sdk_profile(profile_value);
+        }else{
+            do_get_sdk_profile();
+        }
+
+    }
+    else if(strncmp(cmd,"VER",3) == 0)
+    {
+        ret = do_get_bt_sdk_version();
+    }
+    else if(strncmp(cmd,"BTEN",4) == 0)
+    {
+        pbap_at_buff_init();
+        char *p = cmd + 5;
+        if(sgflag)
+        {
+            int value = atoi(p);
+            bse_log_print("at_command", "\r\n", "BTEN start value = %d\n", value);
+            switch (value)
+            {
+                case 0: {
+                    //pthread_t bt_diable_thread_id;
+                    //bse_log_print("at_command", "\r\n", "pthread_create start\n");
+                    //pthread_create(&bt_diable_thread_id, NULL, bt_check_diable_state, NULL); //need ?
+                    //pthread_detach(bt_diable_thread_id);
+                    //bse_log_print("at_command", "\r\n", "pthread_create start bt_diable_thread_id = %p\n", bt_diable_thread_id);
+                
+                    pbap_at_buff_init();
+                    do_abort_pbap(p, 0);
+                    ret = do_close_bt();
+                    }
+                    break;
+                case 1: {
+//#ifdef CONFIG_DUMP_CORE
+#if 0
+                    /*printf("access = %d\n", access("/data/misc/brlink/core.bt", F_OK));
+                    if(access("/data/misc/brlink/core.bt", F_OK) == 0){
+                        remove("/data/misc/brlink/core.bt");
+                    }*/
+                        
+                    struct rlimit lim;
+                    lim.rlim_cur = RLIM_INFINITY;
+                    lim.rlim_max = RLIM_INFINITY;
+
+                    setrlimit(RLIMIT_CORE, &lim);
+                    system("echo \"/data/log/core-%e-%p-%t\" >/proc/sys/kernel/core_pattern");
+                    //system("echo \"/data/misc/brlink/core.bt\" >/proc/sys/kernel/core_pattern");
+#endif
+
+                    do_open_bt();
+                    }
+                    break;
+                case 2: {
+                    do_open_bt_ex();
+                    do_reset_bt(p, 0);
+                    do_action_on_bluetooth_enabled_ex();
+                    }
+                    break;
+                default:
+                    break;
+            }
+            /*if(value)
+            {
+                ret = do_open_bt();
+                
+            }else{
+                do_abort_pbap(p, 0);
+                ret = do_close_bt();
+            }*/
+        }
+    }
+    else if(strncmp(cmd,"ADDR",4) == 0)
+    {
+        ret = do_get_bt_bd();
+    }
+    else if(strncmp(cmd,"LEADDR",6) == 0)
+    {
+        ret = do_get_bt_le_bd();
+    }
+    else if(strncmp(cmd,"NAME",4) == 0)
+    {
+        bse_log_print("at_command", "\r\n", "NAME start\n");
+        char bd_buff[18] = {0};
+        char *p = cmd + 5;
+        if(sgflag == 1)//set local name
+        {
+            bse_log_print("at_command", "\r\n", "sgflag == 1\n");
+            int cindx = 0;
+            char cmd_buff[64] = {0};
+            //if(parnumber == 1)
+            //{
+                for(int i = 0; i < len - 5; i++)
+                {
+                    if(p[i] == ',')
+                    {
+                        if(p[i+1] == '1')
+                        {
+                            do_get_bt_bd_ex(bd_buff);
+                        }
+                        break;
+                    }  
+                    cmd_buff[cindx++] = p[i];
+                }
+            //}
+            if(bd_buff[0])
+            {
+                strncat(cmd_buff, "-", 1);
+                strncat(cmd_buff, bd_buff, 4);
+            }
+            bse_log_print("at_command", "\r\n", "cmd_buff = %s\n", cmd_buff);
+            if(g_bt_opened)
+                ret = do_modify_bt_name(cmd_buff, strlen(cmd_buff));
+            else
+                ret = do_do_modify_bt_name_ex(cmd_buff);
+        }else{
+              bse_log_print("at_command", "\r\n", "sgflag == 0\n");
+            ret = do_modify_bt_name(cmd + 1, 0);//get local name
+        }
+    }
+    else if(strncmp(cmd,"LENAME",6) == 0)
+    {
+        char *p = cmd + 7;
+        //int value = atoi(p);
+
+        //  do_get_le_local_name();//
+     //   }else {
+
+		UINT8 type = 0;
+		UINT8 *adv_data = malloc(1);
+		short offset = 0;
+		
+            	//set le name
+		//MANUFACTURER_SPECIFIC_DATA  //is bt addr + 1
+		UINT8 manufacture_data_len = 3;
+		type = HCI_EIR_DATATYPE_MANUFACTURER_SPECIFIC_DATA;
+		adv_data = realloc(adv_data, manufacture_data_len + 2);
+		adv_data[offset++] = 1 + manufacture_data_len ;
+		adv_data[offset++] = type;
+		adv_data[offset++] = 0xE7;
+		adv_data[offset++] = 0x08;
+		adv_data[offset++] = 0x0E;
+		offset += manufacture_data_len;
+	
+		hlp_gatt_server_set_adv_data(offset,adv_data, 0);
+		free(adv_data);
+
+
+		UINT8 *scan_response_data = malloc(1);
+		short res_offset = 0;
+
+		//COMPLETE_LIST_16_BIT_SERVICE_UUIDS
+		UINT8 bit16_uuid[2] =  {0xA0, 0xAA};
+		UINT8 bit16_uuid_len =  sizeof(bit16_uuid);
+		type = HCI_EIR_DATATYPE_COMPLETE_LIST_OF_16BIT_SERVICE_CLASS_UUIDS;
+		scan_response_data = realloc(scan_response_data, bit16_uuid_len + 2);
+		scan_response_data[res_offset++] = 1 + bit16_uuid_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, bit16_uuid, bit16_uuid_len);
+		res_offset += bit16_uuid_len;	
+
+		//HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME
+		#define GATT_DEVICE_NAME_MAX 26
+        UINT8 local_name[GATT_DEVICE_NAME_MAX] = {0};
+        
+        if(strlen(p) > 2){
+            printf("\nlename_p:%s\n", p);
+            memcpy(local_name, p, strlen(p));
+        } else {
+            UINT8 *t_local_name = hlp_manager_get_local_name();
+            memcpy(local_name, t_local_name, strlen(t_local_name));
+        }
+
+		//UINT8 *local_name = hlp_manager_get_local_name();
+		int name_len = strlen(local_name);
+		printf("\nlocal_name:%s, name_len:%d\n", local_name, name_len);
+//AP630_CARLINK_1
+		if (name_len > GATT_DEVICE_NAME_MAX) {
+   			 type = HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME;//HCI_EIR_DATATYPE_SHORTENED_LOCAL_NAME;
+   			 name_len = GATT_DEVICE_NAME_MAX;
+		} else {
+   			 type = HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME;
+   			name_len = name_len & 0xFF;
+		}
+		scan_response_data = realloc(scan_response_data, name_len + 2);
+		scan_response_data[res_offset++] = 1 + name_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, local_name, name_len);
+		res_offset += name_len;	
+
+#if 0
+		UINT8 bit128_uuid[16] =  {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00};
+		UINT8 bit128_uuid_len =  sizeof(bit128_uuid);
+		type = HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS;
+		scan_response_data = realloc(scan_response_data, bit128_uuid_len + 2);
+		scan_response_data[res_offset++] = 1 + bit128_uuid_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, bit128_uuid, bit128_uuid_len);
+		res_offset += bit128_uuid_len;
+#endif
+		hlp_gatt_server_set_scan_response_data(res_offset, scan_response_data, 0);
+		//hlp_gatt_server_start_advertising_ex(0); //lkz debug
+		free(scan_response_data);
+			
+     }   
+    else if(strncmp(cmd,"PIN",3) == 0)
+    {
+        char *p = cmd + 4;
+        int cmd_len = strlen(p);
+        if(sgflag)
+        {
+            char cmd_buff[16] = {0};
+            memcpy(cmd_buff, p,cmd_len);
+            bse_log_print("at_command", "\r\n", "cmd_buff = %s\n", cmd_buff);
+            //if(cmd_buff[0])
+                //g_bt_opened ? do_modify_paircode(cmd_buff, cmd_len) : do_modify_paircode_ex(cmd_buff);
+        }else{
+            do_modify_paircode(cmd + 1, 0);
+        }
+    }
+    else if(strncmp(cmd,"SSP",3) == 0)
+    {
+        char *p = cmd+4;
+        if(sgflag)
+        {
+            switch (atoi(p))
+            {
+            case 0:
+                //do_gap_set_ssp_mode(0);
+                do_gap_set_ssp_cap_mode(0);
+                do_gap_set_io_cap_mode(2);
+                break;
+            case 1://init start not shixian
+                do_gap_set_ssp_cap_mode(1);
+                do_gap_set_io_cap_mode(1);
+                do_gap_set_usr_pair_mode(1);//自动配对
+                /* code */
+                break;
+            case 2:
+                do_gap_set_ssp_cap_mode(1);//仅显示yes/no
+                do_gap_set_io_cap_mode(0);
+                do_gap_set_usr_pair_mode(1);
+                /* code */
+                break;
+            case 3:
+                do_gap_set_ssp_cap_mode(1);//+CFM进行配对
+                do_gap_set_io_cap_mode(0);
+                do_gap_set_usr_pair_mode(0);
+                /* code */
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    else if(strncmp(cmd,"CFM",3) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd+4;
+            //bse_log_print("at_command", "\r\n", "CFM = %d\n", atoi(p));
+
+            int p_len = strlen(p);
+            if(p_len > 12) {
+                int i;
+                unsigned char bd[BD_ADDR_LEN];
+
+                for (i = 0; i < 6; i++) {
+                    bd[5 - i] = ctoi(p[i * 2]) * 16 + ctoi(p[i * 2 + 1]);
+                }
+                p += 13;
+                do_ssp_user_confirm_ex(bd, atoi(p));
+            } else {
+                do_ssp_user_confirm_ex(NULL, atoi(p));
+            }
+        }
+    }
+    else if(strncmp(cmd,"PAIR",4) == 0)
+    {
+        char *p = cmd + 5;
+        //do_set_pair_mode_ex(atoi(p));
+        //return 0;
+        if(sgflag)
+        {
+            switch (atoi(p))
+            {
+            case 0:
+                do_set_pair_mode_ex(0);
+                //do_le_stop_adv();
+                break;
+            case 1://init start not shixian
+                do_set_pair_mode_ex(1);
+                /* code */
+                break;
+            case 2:
+                //get_usr_adv_data();
+                //do_le_start_adv();
+                /* code */
+                break;
+            case 3:
+                //get_usr_adv_data();
+                do_set_pair_mode_ex(1);
+                //do_le_start_adv();
+                /* code */
+                break;
+            default:
+                break;
+            }
+        }else{
+            do_get_scan_mode(cmd, 0);
+        }
+    }
+    else if(strncmp(cmd,"PAGE",4) == 0)
+    {
+        char *p = cmd + 5;
+        if(sgflag)
+        {
+            if(atoi(p) == 0)
+            {
+                do_set_page_mode_ex(0);
+            }else if(atoi(cmd+dhindx+1) == 1){
+                do_set_page_mode_ex(1);
+            }
+        }
+    }
+    else if(strncmp(cmd,"COD",3) == 0)
+    {
+        do_get_device_cod();
+    }
+    else if(strncmp(cmd,"PLIST",5) == 0)
+    {
+        //bse_log_print("at_command", "\r\n", "PLIST-----------------------------------\n"); 
+        if(sgflag)
+        {
+            char *p = cmd + 6;
+            int value_len = strlen(p);
+            if(value_len == 12)//clear address
+            {
+                do_remove_paired_devices(p, value_len);
+            }else if(value_len == 1)//clear
+            {
+                int value = atoi(p);
+                if(value){//clear idex
+                    
+                } else {//clear all
+                    do_remove_paired_devices(NULL, 0);
+                }
+            }
+        } else {//read all
+            do_get_paired_devices(NULL, 0);
+        }
+    }
+    else if(strncmp(cmd,"TDL",3) == 0)
+    {
+        char *p = cmd + 4;
+        do_set_max_bond_devices(atoi(p));
+    }
+    else if(strncmp(cmd,"SCAN",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            int p_len = strlen(p); 
+            bse_log_print("at_command", "\r\n", "p = %s\n", p);
+            bse_log_print("at_command", "\r\n", "P_len = %d\n", p_len); 
+            int j = 0, i = 0, k = 0;
+            int param1 = 0, param2 = 12;
+            char param3[30] = {0};
+            char v_buff[30] = {0};
+            while((i < (parnumber+1)) && (j < (p_len + 1)))
+            {
+                bse_log_print("at_command", "\r\n", "i = %d parnumber = %d j = %d k - %d\n", i, parnumber, j, k);
+                if(p[j] == ',' || p[j] == '\r' || p[j] == '\n' || p[j] == '\0')
+                {
+                    i++;
+                    switch (i)
+                    {
+                    case 1:
+                        param1 = atoi(v_buff);
+                        bse_log_print("at_command", "\r\n",  "param1 = %d\n", param1);
+                        memset(v_buff, 0, 30);
+                        k=0;
+                        break;
+                    case 2:
+                        param2 = atoi(v_buff);
+                        bse_log_print("at_command", "\r\n",  "param2 = %d\n", param2);
+                        memset(v_buff, 0, 30);
+                        k=0;
+                        /* code */
+                        break;
+                    case 3:
+                        memcpy(param3, v_buff, 25);
+                        bse_log_print("at_command", "\r\n",  "param3 = %s\n", param3);
+                        bt_set_scan_name_buff(param3, strlen(param3));
+                        memset(v_buff, 0, 30);
+                        k=0;
+                        /* code */
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                v_buff[k++] = p[j++];
+            }
+            if(i < 3)
+                bt_cancel_scan_name_buff();
+            switch (param1)
+            {
+            case 0:
+                do_cancel_discovery(NULL, 0);
+                break;
+            case 1:
+                do_inquery_start(param2, 1);
+                break;
+            case 2:
+                do_inquery_start(param2, 2);
+                /* code */
+                break;
+            case 3:
+                do_inquery_start(param2, 3);
+                /* code */
+                break;
+            default:
+                break;
+            }
+        }
+        
+    }
+    else if(strncmp(cmd,"DSCA",4) == 0)
+    {
+        do_discnnect_all_profile();
+    }
+    else if(strncmp(cmd,"REBOOT",6) == 0)//Soft Reboot
+    {
+        
+    }
+    else if(strncmp(cmd,"RESTORE",7) == 0)//Restore Factory Settings
+    {
+
+    }
+    else if(strncmp(cmd,"MICMUTE",7) == 0)//hfp
+    {
+
+    }
+    else if(strncmp(cmd,"SPKVOL",6) == 0)//a2dp
+    {
+
+    }
+    else if(strncmp(cmd,"DERROR",6) == 0)//a2dp
+    {
+        //kill(getpid(), SIGKILL);
+        //kill(getpid(), SIGUSR1);
+    }
+    else 
+    {
+        return -1;
+    }
+    return ret;
+}
+
+int ATHfp(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0;//dhindx = 0;
+    //bse_log_print("at_command", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    bse_log_print("at_command", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            //bse_log_print("at_command", "\r\n", "AT+=\n");
+            sgflag = 1;
+            //dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+    if(strncmp(cmd,"CFG",3) == 0)
+    {
+        do_get_config_hfp();
+    }
+    else if(strncmp(cmd,"STAT",4) == 0)//hfp
+    {
+        do_get_hfp_status(NULL, 0);
+    }
+    else if(strncmp(cmd,"CONN",4) == 0)//hfp
+    {
+        char *p = cmd + 5;
+        do_connect_hfp(p, strlen(p));
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)//hfp
+    {
+        char *p = cmd + 5;
+        do_disconnect_hfp(p, strlen(p));
+    }
+    else if(strncmp(cmd,"DIAL",4) == 0)//hfp
+    {
+        static char dnumber[43] = {0};
+        char *p = cmd + 5;
+        if(sgflag)
+        {
+            memset(dnumber, 0, 43);
+            memcpy(dnumber, p, 43);
+            do_dial(p, strlen(p));
+        }else{//Redial Phone Number
+            //if(dnumber[0])
+                //do_dial(dnumber, strlen(dnumber));
+            do_redial_last_call(p, strlen(p));
+        }
+        
+    }
+    else if(strncmp(cmd,"DTMF",4) == 0)//hfp
+    {
+        char *p = cmd + 5;
+        if(sgflag)
+        {
+            do_dtmf(p, strlen(p));
+        }
+    }
+    else if(strncmp(cmd,"ANSW",4) == 0)
+    {
+        char *p = cmd + 5;
+        do_accept_call(p, strlen(p));
+    }
+    else if(strncmp(cmd,"CHUP",4) == 0)
+    {
+        char *p = cmd + 5;
+        do_reject_call(p, strlen(p));
+    }
+    else if(strncmp(cmd,"MCAL",4) == 0)//hfp
+    {
+        char *p = cmd + 5;
+        if(sgflag)
+        {
+            int param = atoi(p);
+            switch (param)
+            {
+            case 0:
+                app_hf_3_way_control(0, HF_3_WAY_CONTROL_0);
+                break;
+            case 1:
+                app_hf_3_way_control(0, HF_3_WAY_CONTROL_1);
+                break;
+            case 2:
+                app_hf_3_way_control(0, HF_3_WAY_CONTROL_2);
+                break;
+            default:
+                break;
+            }
+            
+        }
+    }
+    else if(strncmp(cmd,"ADTS",4) == 0)//Start/Stop Voice Recognition of Remote Device
+    {
+        do_switch_audio("ADTS", 4);
+    }
+    else if(strncmp(cmd,"VR",2) == 0)
+    {
+        char *p = cmd + 3;
+        if(sgflag)
+        {
+            int param = atoi(p);
+            if(param)
+                do_voice_dial(p, strlen(p));
+            else
+                do_cancel_voice_dial(p, strlen(p));
+        }
+       
+    }
+    else if(strncmp(cmd,"MUTE",4) == 0)//Start/Stop Voice Recognition of Remote Device
+    {
+        if(sgflag)
+        {
+            //bse_log_print("at_command", "\r\n", "atoi(cmd+5) = %d\n", atoi(cmd+5));
+            bse_log_print("at_command", "\r\n", "atoi(cmd+5) = %d\n", atoi(cmd+5));
+            do_set_micmute_stat(atoi(cmd+5));
+        }
+        
+    }
+    return ret;
+}
+
+int ATA2dp(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0;//,dhindx = 0;
+    //bse_log_print("at_command", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    bse_log_print("at_command", "A2DP ",  "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            //bse_log_print("at_command", "\r\n", "AT+=\n");
+            sgflag = 1;
+            //dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+    if(strncmp(cmd,"STAT",4) == 0)
+    {
+        char *p = cmd + 4;
+        do_get_a2dp_status(p, strlen(p));
+    }
+    else if(strncmp(cmd,"CONN",4) == 0)//Start/Stop Voice Recognition of Remote Device
+    {
+        //if(sgflag)
+        //{
+            char *p = cmd + 5;
+            //do_connect_a2dp(p, strlen(p));
+            do_connect_a2dp(p, 0);  //LKZ DEBUG
+        //}
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)//Start/Stop Voice Recognition of Remote Device
+    {
+        printf("lkz debug a2dp disconn\n");
+        do_disconnect_a2dp(cmd, 0);
+    }
+    else if(strncmp(cmd,"MUTE",4) == 0)//Start/Stop Voice Recognition of Remote Device
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            if(atoi(p))
+                do_a2dp_mute(TRUE);
+            else   
+                do_a2dp_mute(FALSE);
+        }
+    }
+    return ret;
+}
+
+int ATAvrcp(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0;//,dhindx = 0;
+    bse_log_print("at_command", "\r\n",  "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            //bse_log_print("at_command", "\r\n", "AT+=\n");
+            sgflag = 1;
+            //dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+    if(strncmp(cmd,"CFG",4) == 0)
+    {
+        if(sgflag)
+        {
+            //char *p = cmd + 5;
+            //int p_type; 
+            bt_event_indicate(BT_EV_EVENT_OK, NULL);
+        }
+    }
+#ifdef CONFIG_BIND_PROFILES
+    else if(strncmp(cmd,"AVRCPCONN",strlen("AVRCPCONN")) == 0)
+    {
+        char * p = cmd + strlen("AVRCPCONN") + 1;
+        do_avrcp_connect(p, strlen(p), sgflag);
+    }
+    else if(strncmp(cmd,"AVRCPDISC",strlen("AVRCPDISC")) == 0)
+    {
+        do_avrcp_disconnect();
+    }
+#endif
+    else if(strncmp(cmd,"PLAYPAUSE",strlen("PLAYPAUSE")) == 0)
+    {
+        do_music_play_pause();
+    }
+    else if(strncmp(cmd,"PLAY",strlen("PLAY")) == 0)
+    {
+        char * p = cmd + strlen("PLAY");
+        //if(bt_manager_get_profiles_value_a2dp())
+            do_music_play(p, 3);
+        //else {
+            //do_hid_send_media_value(1);
+            //do_hid_send_media_value(0);
+        //}
+           
+    }
+    else if(strncmp(cmd,"PAUSE",strlen("PAUSE")) == 0)
+    {
+        //if(bt_manager_get_profiles_value_a2dp())
+            do_music_pause(cmd, 3);
+        //else {
+            //do_hid_send_media_value(1);
+            //do_hid_send_media_value(0);
+        //}
+    }
+    else if(strncmp(cmd,"STOP",strlen("STOP")) == 0)
+    {
+        do_music_stop(cmd, 3);
+    }
+    else if(strncmp(cmd,"NEXT",strlen("NEXT")) == 0)
+    {  
+        //if(bt_manager_get_profiles_value_a2dp())
+            do_music_next(cmd, 3);
+        //else {
+            //do_hid_send_media_value(2);
+            //do_hid_send_media_value(0);
+        //}
+    }
+    else if(strncmp(cmd,"PREV",strlen("PREV")) == 0)
+    {
+        //if(bt_manager_get_profiles_value_a2dp())
+            do_music_previous(cmd, 3);
+        //else {
+            //do_hid_send_media_value(4);
+            //do_hid_send_media_value(0);
+        //}
+    }
+    else if(strncmp(cmd,"FORWARD",strlen("FORWARD")) == 0)
+    {
+        static int forw_f = 0;
+        forw_f++;
+        if(forw_f % 2)
+        {
+            char *forw_p = "1";
+            do_avrcp_fast_play_forward(forw_p, 1);
+        }else{
+            char *forw_p = "0";
+            forw_f = 0;
+            do_avrcp_fast_play_forward(forw_p, 1);
+        }
+    }
+    else if(strncmp(cmd,"BACKWARD",strlen("BACKWARD")) == 0)
+    {
+        static int back_f = 0;
+        back_f++;
+        if(back_f % 2)
+        {
+            char *back_p = "1";
+            do_avrcp_fast_play_rewind(back_p, 1);
+        }else{
+            char *back_p = "0";
+            back_f = 0;
+            do_avrcp_fast_play_rewind(back_p, 1);
+        }
+    }
+    else if(strncmp(cmd,"REPEAT",strlen("REPEAT")) == 0)
+    {
+        char * p = cmd + strlen("REPEAT");
+        if(atoi(p))
+        {
+            do_avrcp_set_player_app(SETTING_ID_REPEAT_MODE, SETTING_VALUE_REPEAT_ALL_TRACK);
+        }else{
+            do_avrcp_set_player_app(SETTING_ID_REPEAT_MODE, SETTING_VALUE_REPEAT_OFF);
+        }
+        
+    }
+    else if(strncmp(cmd,"SHUFFLE",strlen("SHUFFLE")) == 0)
+    {
+        char * p = cmd + strlen("SHUFFLE");
+        if(atoi(p))
+        {
+            do_avrcp_set_player_app(SETTING_ID_SHUFFLE, SETTING_VALUE_SHUFFLE_ALL_TRACK);
+        }else{
+            do_avrcp_set_player_app(SETTING_ID_SHUFFLE, SETTING_VALUE_SHUFFLE_OFF);
+        }
+
+    }
+    else if(strncmp(cmd,"GETMP",strlen("GETMP")) == 0)
+    {
+        
+    }
+    else if(strncmp(cmd,"SETMP",strlen("SETMP")) == 0)
+    {
+        
+    }
+    else if(strncmp(cmd,"GETFD",strlen("GETFD")) == 0)
+    {
+        do_avrcp_get_folder_list(1,2);
+    }
+    else if(strncmp(cmd,"SETFD",strlen("SETFD")) == 0)
+    {
+        
+    }
+    else if(strncmp(cmd,"GETNP",strlen("GETNP")) == 0)
+    {
+        
+    }
+    else if(strncmp(cmd,"ADDMP",strlen("ADDMP")) == 0)
+    {
+        
+    }
+#ifdef CONFIG_BIND_PROFILES
+    else if(strncmp(cmd,"SADENY",6) == 0)
+    {
+        bse_log_print("at_command", "\r\n",  "SADENY start\n");
+        int i;
+        UINT8 bd_addr[6] = {0};
+        char * p = cmd + strlen("SADENY") + 1;
+        printf("SADENY data = ");
+        for (i = 0; i < 6; i++)
+        {
+            bd_addr[5 - i] = ctoi(p[i * 2]) * 16 + ctoi(p[i * 2 + 1]);
+            printf("%02x ", bd_addr[5 - i]);
+        }
+        printf("\n");
+        bt_a2dp_set_deny(bd_addr);
+    }
+    else if(strncmp(cmd,"QADENY",6) == 0)
+    {  
+        bt_a2dp_cannel_deny();
+    }
+#endif
+    else if(strncmp(cmd,"GBIPART",6) == 0)
+    {
+        do_avrcp_bip_art();
+    }
+#ifdef CONFIG_ABS_VOL
+	else if(strncmp(cmd,"SABSUP",6) == 0)
+    {
+        do_music_volume_up();
+    }
+    else if(strncmp(cmd,"SABSDOWN",8) == 0)
+    {
+        do_music_volume_down();
+    }
+    else if(strncmp(cmd, "SABSVAL",7) == 0)
+    {
+        do_send_abs_vol(cmd + 7);
+    }
+#endif
+    return ret;
+}
+
+void cmd_pbap_down_data(char *data, int data_len, int *type, int *offset, int *max_items, int *format, int *required)
+{
+    int i, j=0;
+    int d_number = 0;
+    char buf[8] = {0};
+    for(i=0; i<data_len+1; i++)
+    {
+        if(data[i] == ',' || data[i] == '\0')
+        {
+            switch (d_number++)
+            {
+            case 0:
+                *type = atoi(buf);
+                break;
+            case 1:
+                *offset = atoi(buf);
+            case 2:
+                *max_items = atoi(buf);
+                break;
+            case 3:
+                *format = atoi(buf);
+                break;
+            case 4:
+                *required = atoi(buf);
+                break;
+            default:
+                break;
+            }
+            j = 0;
+            memset(buf, 0, 8);
+
+            continue;
+        }
+        buf[j++] = data[i];
+    }
+}
+
+
+
+char pbap_at_buff[5][32];
+int pb_at_index = 0;
+int w_max_items = 0; 
+int w_pb_offset = 0;
+int w_type = -1;
+int w_offset = 0;
+
+void pbap_at_buff_init()
+{
+    int i;
+    pb_at_index = 0;
+    for(i = 0; i < 5; i++)
+    {
+        memset(pbap_at_buff[i], 0, 32);
+    }
+}
+
+void pbap_at_flag_init()
+{
+    w_max_items = 0; 
+    w_pb_offset = 0;
+    w_type = -1;
+    w_offset = 0;
+}
+
+void pbap_at_buff_pull(const char *cmd, int len)
+{
+    memcpy(pbap_at_buff[pb_at_index], cmd, len);
+    pb_at_index++;
+}
+
+int ATPbap(const char *cmd, int len)
+{
+    //int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0;//dhindx = 0;
+    bse_log_print("at_command", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    printf("cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            bse_log_print("at_command", "\r\n", "AT+=\n");
+            sgflag = 1;
+            //dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+    
+    if(strncmp(cmd,"DOWN",4) == 0)
+    {
+        if(sgflag)
+        {
+            if(app_pbap_get_status() > ST_PBAP_CONNECTED)
+            {
+                //memcpy(pbap_at_buff[pb_at_index], cmd, len);
+                //pb_at_index++;
+                //pbap_at_buff_pull(cmd, len);
+                bt_event_indicate(BT_EV_EVENT_OK, NULL);
+                return 0;
+            }
+            pbap_at_flag_init();
+
+            char *p = cmd + 5;
+            int p_type = -1;
+            int p_max_items = -1;
+            int p_offset = 0; 
+            int p_format; 
+            int p_required;  
+
+            //bse_log_print("at_command", "\r\n", "[test_2]strlen(p) = %d\n", strlen(p));
+            cmd_pbap_down_data(p, strlen(p), &p_type, &p_offset, &p_max_items, &p_format, &p_required);
+
+           // bse_log_print("at_command", "\r\n", "[2]p_type = %d p_max_items = %d p_format = %d p_required = %d parnumber = %d\n", p_type, p_max_items, p_format, p_required, parnumber);
+
+            if((p_type == 2|| p_type == 3 ||p_type == 4)&& parnumber == 0)
+            {
+                p_type = 5;
+            }
+
+            if(p_max_items < 0)
+            {
+                if(p_type == 3)
+                    p_max_items = 50;
+                else
+                    p_max_items = 3000;
+            }
+			
+            bse_log_print("at_command", "\r\n", "p_offset = %d p_max_items = %d p_type = %d\n", p_offset, p_max_items, p_type);
+
+            w_max_items = p_max_items;
+            w_type = p_type;
+            w_pb_offset = p_offset;
+
+            if(p_max_items > 50 && (p_type >=2 && p_type <= 5)) {
+                p_max_items = 50;
+            }
+
+            switch (p_type)
+            {
+            case 0://SIM
+                do_get_pbap_book(0, p_offset, p_max_items);
+                break;
+            case 1://Phone
+                do_get_pbap_book(1, p_offset, p_max_items);
+                break;
+            case 2://ICH
+                do_get_pbap_book(2, p_offset, p_max_items);
+                break;
+            case 3://OCH
+                do_get_pbap_book(3, p_offset, p_max_items);
+                break;
+            case 4://MCH
+                do_get_pbap_book(4, p_offset, p_max_items);
+                break;
+            case 5://ALL
+                do_get_pbap_book(7, p_offset, p_max_items);
+                break;
+            case 6://vcard_test
+                do_get_pbap_get_vcardlisting("123456789");
+                break;
+            default:
+                break;
+            }
+
+        }
+    }
+    else if(strncmp(cmd,"ABORT",5) == 0)
+    {
+        char *p = cmd + 5;
+        do_abort_pbap(p, 0);
+        pbap_at_buff_init();
+        pbap_at_flag_init();
+
+    }
+    else if(strncmp(cmd,"CONN",5) == 0)
+    {
+        do_pbap_connect();
+    }
+    else if(strncmp(cmd,"DSIC",5) == 0)
+    {
+        do_pbap_disc_stop();
+    }
+    return 0;
+}
+
+#ifdef CONFIG_SPP
+int ATSpp(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0,dhindx = 0;
+    bse_log_print("at_command spp", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            bse_log_print("at_command spp", "\r\n", "AT+=\n");
+            sgflag = 1;
+            dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+     if(strncmp(cmd,"STAT",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            do_spp_get_status();
+        }
+    }
+    else if(strncmp(cmd,"CONN",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            int i;
+            UINT8 spp_uuid[16] = {0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb};
+            unsigned char bd[BD_ADDR_LEN];
+            //UINT16 svr_channel = do_spp_get_server_channel();
+            for (i = 0; i < 6; i++) {
+                bd[5 - i] = ctoi(p[i * 2]) * 16 + ctoi(p[i * 2 + 1]);
+            }
+            do_spp_connect(0, bd, spp_uuid);
+        }
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)
+    {
+        //char *p = cmd + 5;
+        do_spp_disconnect();
+    }
+    else if(strncmp(cmd,"SEND",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            char len_buff[4] = {0};
+            char *data_p = NULL;
+            int i,j=0;
+            for(i=0; i<4; i++)
+            {
+                if(p[i] == ',')
+                    break;
+                len_buff[i] = p[i];
+            }
+            int data_len = atoi(len_buff);
+            printf("data_len = %d\n", data_len);
+            p += i+1;
+            data_p = (char *)NEW(data_len);
+            for(i=0; i<data_len; i++)
+            {
+                data_p[j++] = p[i] - 30;
+            }
+            do_spp_send_data(data_p, data_len);
+
+            FREE(data_p);
+        } 
+    }
+}
+
+
+int ATAap(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0,dhindx = 0;
+    bse_log_print("at_command app", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            bse_log_print("at_command app", "\r\n", "AT+=\n");
+            sgflag = 1;
+            dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+     if(strncmp(cmd,"STAT",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            do_spp_get_status();
+        }
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)
+    {
+        //char *p = cmd + 5;
+        do_spp_disconnect();
+    }
+    else if(strncmp(cmd,"SEND",4) == 0)
+    {
+        char *p = cmd + 5;
+        unsigned char *data_p = NULL;
+        int i,j=0;
+        int str_len = strlen(p);
+	 int data_len =str_len / 2 ;
+	  
+        printf("aap str_len:%d, data_len = %d p=%s\n", str_len, data_len, p);
+        data_p = (char *)NEW(data_len);
+	 hex_string_to_byte_array(str_len, p , data_p);
+        do_aap_send_data(data_p, data_len);
+        FREE(data_p);
+    }
+
+}
+
+int ATIap(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0,dhindx = 0;
+    bse_log_print("at_command iap", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            bse_log_print("at_command iap", "\r\n", "AT+=\n");
+            sgflag = 1;
+            dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+     if(strncmp(cmd,"STAT",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+            do_spp_get_status();
+        }
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)
+    {
+        //char *p = cmd + 5;
+        do_spp_disconnect();
+    }
+    else if(strncmp(cmd,"SEND",4) == 0)
+    {
+        char *p = cmd + 5;
+        unsigned char *data_p = NULL;
+        int i,j=0;
+        int str_len = strlen(p);
+	    int data_len =str_len / 2 ;
+	  
+        printf("iap str_len:%d, data_len = %d p=%s\n", str_len, data_len, p);
+        data_p = (char *)NEW(data_len);
+	    hex_string_to_byte_array(str_len, p , data_p);
+        do_iap_send_data(data_p, data_len);
+        FREE(data_p);
+    }
+}
+#endif
+
+int ATGatt(const char *cmd, int len)
+{
+    //int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0;//,dhindx = 0;
+    bse_log_print("ATGatt", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            //bse_log_print("ATGatt", "\r\n", "AT+=\n");
+            sgflag = 1;
+            //dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+     if(strncmp(cmd,"STAT",4) == 0)
+    {
+        if(sgflag)
+        {
+            //char *p = cmd + 5;
+            //int p_type; 
+        }
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)
+    {
+        //char *p = cmd + 5;
+        
+    }
+    else if(strncmp(cmd,"SEND",4) == 0)
+    {
+        char *p = cmd + 5;
+        unsigned char *data_p = NULL;
+        int i,j=0;
+        int str_len = strlen(p);
+	 int data_len =str_len / 2 ;
+	  
+        printf("gatt send str_len:%d, data_len = %d p=%s\n", str_len, data_len, p);
+        data_p = (char *)NEW(data_len);
+        hex_string_to_byte_array(str_len, p , data_p);
+        //do_iap_send_data(data_p, data_len);
+        FREE(data_p);
+    }else if(strncmp(cmd,"SET",3) == 0)
+    {
+
+	 printf("gatt set cmd+4:%s\n", cmd+4);
+	 
+	if(strncmp(cmd + 4, "AAA2", 4) == 0) {
+		ey_set_ap_ssid(0, cmd + 8);
+	} else if(strncmp(cmd + 4, "AAA3", 4) == 0) {
+		ey_set_ap_passwd(0, cmd + 8);
+	} else if(strncmp(cmd + 4, "AAA7", 4) == 0) {
+		ey_set_ap_connect_status(0, cmd + 8);
+	}else if(strncmp(cmd + 4, "AAA5", 4) == 0) {
+		ey_set_p2p_go_data(0, cmd + 8);
+	}
+    }else if(strncmp(cmd,"IPADDR",6) == 0){
+	unsigned char uuid_p[2] = {0xAA, 0xA1};
+	ey_set_ip_addr(uuid_p, cmd + 7);
+    }
+       
+    return 0;
+}
+
+int ATAdv(const char *cmd, int len)
+{
+#if 0
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0,dhindx = 0;
+    bse_log_print("at_command adv", "\r\n", "cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            bse_log_print("at_command adv", "\r\n", "AT+=\n");
+            sgflag = 1;
+            dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+     if(strncmp(cmd,"DATA",4) == 0)
+    {
+        if(sgflag)
+        {
+            char *p = cmd + 5;
+           	int str_len = strlen(p);
+		char addr_buf[6];
+		memcpy(addr_buf, p, 6);
+		
+		//addr_buf[0] = addr_buf[0] + 1; //amt630
+#if 1
+		UINT8 type = 0;
+		UINT8 *adv_data = malloc(1);
+		short offset = 0;
+
+printf("addr_buf:%02x %02x %02x %02x %02x %02x :%d\n", addr_buf[0], addr_buf[1], addr_buf[2], addr_buf[3], addr_buf[4], addr_buf[5], sizeof(addr_buf));
+
+/*
+07 FF DD 0D 30 03 1F FD 
+03 03 67 69 
+09 16 60 B3 01 00 00 00 00 00 
+10 09 41 50 36 33 30 5F 43 41 52 4C 49 4E 4B 5F 31 
+*/
+
+		//MANUFACTURER_SPECIFIC_DATA  //is bt addr + 1
+		UINT8 manufacture_data_len =  sizeof(addr_buf);
+		type = HCI_EIR_DATATYPE_MANUFACTURER_SPECIFIC_DATA;
+		adv_data = realloc(adv_data, manufacture_data_len + 2);
+		adv_data[offset++] = 1 + manufacture_data_len ;
+		adv_data[offset++] = type;
+		memcpy(adv_data + offset, addr_buf, manufacture_data_len);
+		offset += manufacture_data_len;
+	
+		hlp_gatt_server_set_adv_data(offset,adv_data, 0);
+		free(adv_data);
+
+
+		UINT8 *scan_response_data = malloc(1);
+		short res_offset = 0;
+
+
+		//COMPLETE_LIST_16_BIT_SERVICE_UUIDS
+		UINT8 bit16_uuid[2] =  {0x67, 0x69};
+		UINT8 bit16_uuid_len =  sizeof(bit16_uuid);
+		type = HCI_EIR_DATATYPE_COMPLETE_LIST_OF_16BIT_SERVICE_CLASS_UUIDS;
+		scan_response_data = realloc(scan_response_data, bit16_uuid_len + 2);
+		scan_response_data[res_offset++] = 1 + bit16_uuid_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, bit16_uuid, bit16_uuid_len);
+		res_offset += bit16_uuid_len;		
+		
+		//HCI_EIR_DATATYPE_SERVICE_DATA
+		UINT8 service_data[8] =  {0x60, 0xB3, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+		UINT8 service_data_len =  sizeof(service_data);
+		type = HCI_EIR_DATATYPE_SERVICE_DATA;
+		scan_response_data = realloc(scan_response_data, service_data_len + 2);
+		scan_response_data[res_offset++] = 1 + service_data_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, service_data, service_data_len);
+		res_offset += service_data_len;	
+
+		//HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME
+		#define GATT_DEVICE_NAME_MAX 26
+		UINT8 *local_name = hlp_manager_get_local_name();
+		int name_len = strlen(local_name);
+		printf("local_name:%s, name_len:%d\n", local_name, name_len);
+//AP630_CARLINK_1
+		if (name_len > GATT_DEVICE_NAME_MAX) {
+   			 type = HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME;//HCI_EIR_DATATYPE_SHORTENED_LOCAL_NAME;
+   			 name_len = GATT_DEVICE_NAME_MAX;
+		} else {
+   			 type = HCI_EIR_DATATYPE_COMPLETE_LOCAL_NAME;
+   			name_len = name_len & 0xFF;
+		}
+		scan_response_data = realloc(scan_response_data, name_len + 2);
+		scan_response_data[res_offset++] = 1 + name_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, local_name, name_len);
+		res_offset += name_len;	
+
+#if 0
+		UINT8 bit128_uuid[16] =  {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00};
+		UINT8 bit128_uuid_len =  sizeof(bit128_uuid);
+		type = HCI_EIR_DATATYPE_COMPLETE_LIST_OF_128BIT_SERVICE_CLASS_UUIDS;
+		scan_response_data = realloc(scan_response_data, bit128_uuid_len + 2);
+		scan_response_data[res_offset++] = 1 + bit128_uuid_len ;
+		scan_response_data[res_offset++] = type;
+		memcpy(scan_response_data + res_offset, bit128_uuid, bit128_uuid_len);
+		res_offset += bit128_uuid_len;
+#endif
+		hlp_gatt_server_set_scan_response_data(res_offset, scan_response_data, 0);
+		hlp_gatt_server_start_advertising_ex(0);
+		free(scan_response_data);
+
+#endif
+        }
+    }
+#endif
+}
+
+#ifdef CONFIG_HID
+int ATHid(const char *cmd, int len)
+{
+    int ret = -1;
+    if(cmd == NULL || len <= 0)
+        return -1;
+    int sgflag = 0;
+    int parnumber = 0,dhindx = 0;
+    bse_log_print("at_command", "\r\n", "hid cmd = %s len = %d\n", cmd, len);
+    for(int i=0; i<len-1; i++)
+    {
+        if(cmd[i] == '=')
+        {
+            bse_log_print("at_command", "\r\n", "AT+=\n");
+            sgflag = 1;
+            dhindx = i;
+        }
+        else if(cmd[i] == ',')
+        {
+            parnumber++;
+        }
+    }
+
+     if(strncmp(cmd,"CONN",4) == 0)
+    {
+       bse_log_print("at_command", "\r\n", "todo do_hid_connect\n");
+        do_hid_connect();
+    }
+    else if(strncmp(cmd,"DISC",4) == 0)
+    {
+        do_hid_disconnect();
+    }
+    else if(strncmp(cmd,"STAT",4) == 0)
+    {
+        do_hid_get_status();
+    }
+    else if(strncmp(cmd,"COORD",4) == 0)
+    {
+       //TODO bt_hid_send_coordinate(button, x, y); 
+    }
+    else if(strncmp(cmd,"KEY",3) == 0)
+    {
+        if(sgflag) {
+            //do_hid_send_key_value(strtol(cmd+4, NULL, 10));
+            do_hid_send_media_value(strtol(cmd+4, NULL, 10));
+        }
+    }
+}
+#endif
+
+// cmd[0]: C M R T S H P G O A
+void at_process_interpret_ex(const char *head, const char *data, unsigned short len)
+{
+    if (!head)
+    {
+        return; 
+    }
+
+    bse_log_print("at_command", "\r\n", "g_bt_opened= [%d], [AT]   AT+[%s]", g_bt_opened, data);
+    if(*head == 'A' && *(head + 1) == 'T' && *(head + 2) == '+')
+    {
+        if(!g_bt_opened )
+        {
+            if(memcmp(data, "BTEN=1", 6) == 0 || memcmp(data, "SSP", 3) == 0) {
+                bse_log_print("at_command", "\r\n", "g_bt_opened = 0 curr command : BTEN\n");
+                bt_event_indicate(BT_EV_EVENT_OK, NULL);
+            } else {
+                bse_log_print("at_command", "\r\n", "g_bt_opened = 0 curr command : other\n");
+                bt_event_indicate(BT_EV_EVENT_ERROR, NULL);
+                return ; 
+            }
+        }
+
+        char *sCmdLine = (char *)data;
+        if(strncmp(sCmdLine,"GAP",3) == 0)
+        {
+            ATGap(sCmdLine + 3, strlen(sCmdLine + 3));
+        }
+        else if((strncmp(sCmdLine,"HFP",3) == 0) || (strncmp(sCmdLine,"MIC",3) == 0))
+        {
+            ATHfp(sCmdLine + 3, strlen(sCmdLine + 3));
+        }
+        /*else if(strncmp(sCmdLine,"AVRCP",5) == 0)
+        {
+            bse_log_print("at_command", "\r\n", "AVRCP start\n");
+            ATAvrcp(sCmdLine + 5, strlen(sCmdLine + 5));
+        }*/
+        else if(strncmp(sCmdLine,"A2DP",4) == 0)
+        {
+            bse_log_print("at_command", "\r\n", "A2DP start\n");
+            ATA2dp(sCmdLine + 4, len);
+        }
+        else if(strncmp(sCmdLine,"PB",2) == 0)
+        {
+            ATPbap(sCmdLine + 2, strlen(sCmdLine + 2));
+        }
+#ifdef CONFIG_SPP
+        else if(strncmp(sCmdLine,"SPP",3) == 0)
+        {
+		ATSpp(sCmdLine + 3, strlen(sCmdLine + 3));
+        }
+#ifdef CONFIG_AAP
+	  else if(strncmp(sCmdLine,"AAP",3) == 0)
+        {
+		ATAap(sCmdLine + 3, strlen(sCmdLine + 3));
+        }
+#endif
+#ifdef CONFIG_IAP
+	  else if(strncmp(sCmdLine,"IAP",3) == 0)
+        {
+		ATIap(sCmdLine + 3, strlen(sCmdLine + 3));
+        } 
+#endif
+#endif
+        else if(strncmp(sCmdLine,"GATT",4) == 0)
+        {
+		ATGatt(sCmdLine + 4, strlen(sCmdLine + 4));
+        }
+	    else if(strncmp(sCmdLine,"IPADDR",6) == 0)
+        {
+		ATGatt(sCmdLine, strlen(sCmdLine));
+        }	
+	  else if(strncmp(sCmdLine,"ADV",3) == 0)
+        {
+		ATAdv(sCmdLine + 3, strlen(sCmdLine + 3));
+        }
+        else if(strncmp(sCmdLine,"HID",3) == 0)
+        {
+            ATHid(sCmdLine + 3, strlen(sCmdLine + 3));
+        }
+        else//gap
+        {
+            bse_log_print("lkz debug ", "gap or avrcp cmd = %s\n", sCmdLine);
+            int r = ATGap(sCmdLine, len);
+            bse_log_print("lkz debug ", "cmd %s ret = %d\n",sCmdLine, r);
+            if(r < 0)
+            {
+                ATAvrcp(sCmdLine, len);
+                //ATAvrcp(sCmdLine + 5, strlen(sCmdLine + 5));
+            }
+        }
+    }
+    
+}

@@ -1,0 +1,2172 @@
+#include "btdatatype.h"
+#include "brt_trace.h"
+#include "rfcomm_ui.h"
+
+#include "sdap_uimacro.h"
+#include "sdap_uistru.h"
+#include "sdap_uifunc.h"
+
+#include "sdpui.h"
+
+#include "btlist.h"
+#include "buff.h"
+#include "sysdep.h"
+
+
+#include "app_rfcomm.h"
+#include <string.h>
+#include "fsm.h"
+
+#include "app_rfcomm_sdp.h"
+#include "internal_manager.h"
+#include "sdap_ui.h"
+
+#include "debug_utils.h"
+#include "brt_trace.h"
+
+#define MODULE_TAG "SPP"
+#define SPP_DBG(fmt, ...)  bse_log_print(MODULE_TAG, "",fmt , ## __VA_ARGS__)
+
+#define SERVER_UUID_LEN 16
+static UINT8   s_spp_status = 0;
+static UINT32 s_spp_handle = 0;
+
+static UINT16 custom_vid = 0;
+static UINT16 custom_pid = 0;
+static UINT16 custom_ver = 0;
+
+static UINT8 iap2_server_uuid[SERVER_UUID_LEN] = {//MSB First
+    0x00,0x00,0x00,0x00,0xDE,0xCA,0xFA,0xDE,0xDE,0xCA,0xDE,0xAF,0xDE,0xCA,0xCA,0xFF
+};
+static UINT8 iap2_client_uuid[SERVER_UUID_LEN] = {//MSB First
+    0x00,0x00,0x00,0x00,0xDE,0xCA,0xFA,0xDE,0xDE,0xCA,0xDE,0xAF,0xDE,0xCA,0xCA,0xFE
+   };
+
+static UINT8 aa_server_uuid[SERVER_UUID_LEN] = {
+	0x4D, 0xE1, 0x7A, 0x00, 0x52, 0xCB, 0x11, 0xE6, 0xBD, 0xF4, 0x08, 0x00, 0x20, 0x0C, 0x9A, 0x66
+	};
+
+
+void hlp_spp_set_status(UINT8 state) 
+{
+    s_spp_status = state;
+    SPP_DBG("hlp_spp_set_status(%d)",s_spp_status);
+}
+UINT8 hlp_spp_get_status(void)
+{
+    SPP_DBG("hlp_spp_get_status(%d)", s_spp_status);
+    return s_spp_status;
+}
+void hlp_bda_copy(UINT8 *dest_bd, UINT8 *src_bd)
+{
+	memcpy(dest_bd, src_bd, BD_ADDR_LEN);
+}
+
+APP_RFC_BOOL hlp_bda_cmp(UINT8 *bd_a, UINT8 *bd_b)
+{
+	 return !memcmp(bd_a, bd_b, BD_ADDR_LEN);
+}
+
+static void hlp_rf_callback_dispatch(UCHAR msg_id, void *param);
+static rfc_connection_info_t * hlp_rfc_conn_info_get_by_bda_channel(UINT8 *bda, int channel);
+
+
+#define IS_CHANNEL_VALID(chn) ((chn >= 1) && (chn <= 30))
+
+
+/*
+element is rfc_server_info_t;
+*/
+struct ListStru g_rfc_server_info_list = {0}; ;
+SYSTEM_LOCK s_srv_info_lock;
+
+/****************************************************/
+/*
+ Todo: 
+          maybe we need seprate connection list for rfcomm conneciont role client or server.
+
+Now-2014-11-12: 
+	This is the connection list for client role.
+          
+*/
+static struct ListStru g_rfc_connection_list={0}; 
+SYSTEM_LOCK s_rfc_connection_lock;
+
+static rfc_callbacks_t *g_rfc_callbacks;
+
+static rfc_connection_info_t aa_conn_info = {0};
+static rfc_connection_info_t iap2_conn_info = {0};
+
+static struct FsmInst *g_app_rfcomm_fsminst= NULL;
+static char app_rfcomm_inst_name[] = "AppRFCFsm";
+
+/*
+when ( g_current_socket_fd > 0), it identify the context that initiate the rfcomm connect request and 
+	will be passed back to connect_cb.
+	maybe it should be a pointer to a context struct.
+when (g_current_socket_fd is zero), it means no rfcomm connect request is ongoing.
+*/
+static int g_current_socket_fd = 0;
+
+static struct ListStru g_map_channel_to_context_list; 
+
+/*
+Return Value:
+	index in the array (rfc_sdp_context_info_t->server_channel[30])
+*/
+int RFC_Connect_Sdp_Context(UINT8 bd[6], rfc_sdp_context_info_t *sdp_context)
+{
+	int i = 0;
+	for(i = 0; i < sdp_context->server_channle_cnt; i++)
+	{
+		if(0 == sdp_context->server_channel[i])
+		{
+			/* HuaWei Y511-T00 may have an invalid rfcomm channel 0. */
+			SPP_DBG("******invalid rfcomm channel 0");
+			continue;
+		}
+		
+		if(( rfc_connection_info_t * )NULL != hlp_rfc_conn_info_get_by_bda_channel(bd, sdp_context->server_channel[i]))
+		{	
+			//connected
+			SPP_DBG("channel %02x already connected", sdp_context->server_channel[i]);
+			continue;
+		}
+		{
+			map_channel_to_context_t * map_info = g_map_channel_to_context_list.head;
+			SPP_DBG("******-----test if in connecting-----******");
+			while(map_info)
+			{
+				SPP_DBG("addrA:%x:%x:%x:%x:%x:%x", map_info->bd[0], map_info->bd[1], map_info->bd[2], map_info->bd[3], map_info->bd[4], map_info->bd[5]);
+				SPP_DBG("addrB:%x:%x:%x:%x:%x:%x", bd[0], bd[1], bd[2], bd[3], bd[4], bd[5]);
+				SPP_DBG("ChannelA:%d", map_info->server_channel);
+				SPP_DBG("ChannelB:%d", sdp_context->server_channel[i]);
+				
+				if(hlp_bda_cmp(map_info->bd, bd) &&
+					(map_info->server_channel == sdp_context->server_channel[i]))
+				{
+					break;
+				}
+				map_info = LNEXT(map_info);
+			}
+			if(map_info)
+			{
+				SPP_DBG("********to continue....");
+				continue;
+			}
+			else
+			{
+				SPP_DBG("********to connect...");
+			}
+		}
+		{
+			struct RFCOMM_ConnectStru *req = NULL;
+			req = NEW(sizeof(struct RFCOMM_ConnectStru));
+			memcpy(req->bd, bd, 6);
+
+			req->server_channel = sdp_context->server_channel[i];
+			req->cbk = (void *)hlp_rf_callback_dispatch;
+			req->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;////APP_SPP_RFCOMM_MFS;
+			req->init_credit = 0;	/* max_credits will be reported to remote when connection complete */
+			req->auto_credit = TRUE;
+
+			{
+				/*
+				 saving information for maping channel to context. 
+				*/
+				map_channel_to_context_t *channel_to_context = List_NodeNew( sizeof(map_channel_to_context_t));
+
+				hlp_bda_copy(channel_to_context->bd, bd);
+				channel_to_context->server_channel = req->server_channel;
+				channel_to_context->context = sdp_context->socket_fd;
+				memcpy(channel_to_context->rfc_srv_uuid128, sdp_context->uuid_128, 16);
+
+				List_AddHead(&g_map_channel_to_context_list, channel_to_context);
+				SPP_DBG("********to connect2....channel=%d, context=%d",  channel_to_context->server_channel, channel_to_context->context);
+			}
+			//
+			
+			RFCOMM_Connect_Req(req);
+		}
+		break;
+	}
+	return i;
+}
+
+static void RFC_Sdp_EventCbk(void *handle, void *context, tRFC_SDP_Event_Type event, void *param)
+{
+	int socket_fd;
+	UINT8 *bd;
+	rfc_sdp_context_info_t *sdp_context = context;
+	bd = handle;
+	
+	SPP_DBG("%s: addr:%x:%x:%x:%x:%x:%x event:%d\n", __func__, bd[0], bd[1],bd[2], bd[3],bd[4], bd[5], event);
+	switch(event)
+	{
+		case RFC_SDP_EVT_SERVICE_IND:
+			{
+				struct SDAP_SPPInfoStru *sdp_info = param;
+				SPP_DBG("sdp get remote server rfc channel =%02x(sdp_context=%p)", (UINT8)(sdp_info->svr_chnl), (void*)sdp_context);
+				sdp_context->server_channel[sdp_context->server_channle_cnt++] = sdp_info->svr_chnl;
+			}
+			break;
+		case RFC_SDP_EVT_DISCOVER_COMPLETE:
+			{
+				UINT8 status = *((UINT8 *)param);
+
+				SPP_DBG("RFC_Sdp_EventCbk bd %d,status %d(sdp_context=%p)",bd[0],status, (void*)sdp_context);
+				if( (status == ER_RFC_SUCCESS) && sdp_context->server_channle_cnt /* &&
+					(g_current_socket_fd == 0)*/)
+				{
+					int i;
+					g_current_socket_fd = sdp_context->socket_fd;
+					i = RFC_Connect_Sdp_Context(bd, sdp_context);
+					if(i == sdp_context->server_channle_cnt)
+					{
+						/*no non-connected channel found.*/
+						g_current_socket_fd = 0;
+						//g_rfc_callbacks->connect_cb(sdp_context->socket_fd, bd, INVALID_RFC_HANDLE, INVALID_RFC_CHN, rfc_status_fail,FALSE);
+					}
+					SPP_DBG("i=%02x, channel cnt=%02x",i, sdp_context->server_channle_cnt);
+				} 
+				else
+				{
+					rfc_connection_info_t ri;
+					SPP_DBG("RFC_Sdp_EventCbk error");
+					//todo : callback to notify spp connection failure.hlp_spp_connect_cbk
+				     
+                   			memset(&ri, 0, sizeof(rfc_connection_info_t));
+                    		ri.conn_state = rfc_status_fail;
+					
+                   		 	memcpy(ri.bd, sdp_context->bd_addr,BD_ADDR_LEN);
+					memcpy(ri.rfc_srv_uuid128,sdp_context->uuid_128,16);
+                    		SPP_DBG("uuia[15]=%x,uuid[16]=%x",sdp_context->uuid_128[14],sdp_context->uuid_128[15]);
+                    		//if ( (memcmp(sdp_context->uuid_128,iap2_client_uuid,SERVER_UUID_LEN) != 0)) {
+					if(1){	
+						event_spp_indication(EV_APP_SRV_RFC_CONNECT_RET,&ri);
+                    		} else {//IAP2 or SPP go this way.
+                       			 event_spp_indication(EV_APP_SPP_CONNECT_RET, &ri);
+                   			}
+                		}
+				FREE(context);
+			}
+			break;
+	}
+}
+
+rfc_connection_info_t * hlp_rfc_conn_info_get_by_bda(UINT8 *bda)
+{
+	ENTER_CRITICAL(s_rfc_connection_lock);
+	rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+	while(rfc_conn_info)
+	{ //&&
+			//(rfc_conn_info->conn_state == rfc_conn_state_connected)
+		if(hlp_bda_cmp(bda, rfc_conn_info->bd))
+		{
+			break;
+		}
+		rfc_conn_info = LNEXT(rfc_conn_info);
+	}
+	LEAVE_CRITICAL(s_rfc_connection_lock);
+	return rfc_conn_info;
+}
+rfc_connection_info_t * hlp_rfc_conn_info_get_by_hdl(UINT32 handle)
+{
+    SPP_DBG("hlp_rfc_conn_info_get_by_hdl handle:%x enter", handle);
+    rfc_connection_info_t * rfc_conn_info = NULL;
+    ENTER_CRITICAL(s_rfc_connection_lock);	
+    rfc_conn_info = g_rfc_connection_list.head;
+    while (rfc_conn_info) { 	
+        SPP_DBG("input handle(0x%x),read handle(0x%x),state(%d)",handle,rfc_conn_info->handle,rfc_conn_info->conn_state);
+        if ((handle == rfc_conn_info->handle) && (rfc_conn_info->conn_state == rfc_conn_state_connected)) {
+            break;
+        }
+        rfc_conn_info = LNEXT(rfc_conn_info);
+    }
+    LEAVE_CRITICAL(s_rfc_connection_lock);
+    ENTER_CRITICAL(s_srv_info_lock);
+    if (rfc_conn_info == NULL) {
+        //SPP_DBG("connection list is NULL!!!!");
+       
+        rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+        while (srv_info) {
+            rfc_conn_info = srv_info->rfc_conn_list.head;
+            while (rfc_conn_info) { 	
+                SPP_DBG("input_handle(%x),rfc_conn_info->handle(%x)!",handle,rfc_conn_info->handle);
+                if(handle == rfc_conn_info->handle) {
+                	break;
+                }
+                rfc_conn_info = LNEXT(rfc_conn_info);
+            }
+            if (rfc_conn_info) {
+                break;
+            }
+            srv_info = LNEXT(srv_info);
+        }
+    }
+    LEAVE_CRITICAL(s_srv_info_lock);
+    if(rfc_conn_info) {
+    	SPP_DBG("hlp_rfc_conn_info_get_by_hdl handle:%x exit", rfc_conn_info->handle);
+    } else {
+	 SPP_DBG("hlp_rfc_conn_info_get_by_hdl handle exit error");
+    }
+    return rfc_conn_info;
+}
+
+APP_RFC_BOOL hlp_rfc_conn_info_is_connected(UINT8 *bda)
+{
+	ENTER_CRITICAL(s_rfc_connection_lock);
+	rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+	while(rfc_conn_info)
+	{
+		if(hlp_bda_cmp(bda, rfc_conn_info->bd))
+		{
+			if(rfc_conn_info->conn_state == rfc_conn_state_connected)
+			{
+				return APP_RFC_TRUE;
+			}
+		}
+		rfc_conn_info = LNEXT(rfc_conn_info);
+	}
+	LEAVE_CRITICAL(s_rfc_connection_lock);
+	return APP_RFC_FALSE;
+}
+
+APP_RFC_BOOL hlp_rfc_conn_info_is_disconnected(UINT8 *bda)
+{
+	ENTER_CRITICAL(s_rfc_connection_lock);
+	rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+	while(rfc_conn_info)
+	{
+		//print_b_addr( rfc_conn_info->bd);
+		
+		if(hlp_bda_cmp(bda, rfc_conn_info->bd))
+		{
+			if(rfc_conn_info->conn_state == rfc_conn_state_disconnected)
+			{
+				return APP_RFC_TRUE;
+			}
+		}
+		rfc_conn_info = LNEXT(rfc_conn_info);
+	}
+	LEAVE_CRITICAL(s_rfc_connection_lock);
+	return APP_RFC_FALSE;
+}
+
+static rfc_connection_info_t * hlp_rfc_conn_info_get_by_bda_channel(UINT8 *bda, int channel)
+{
+	ENTER_CRITICAL(s_rfc_connection_lock);
+	rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+	SPP_DBG("addrA:%x:%x:%x:%x:%x:%x\n", bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
+	while(rfc_conn_info)
+	{
+		
+		SPP_DBG("addrB:%x:%x:%x:%x:%x:%x\n", rfc_conn_info->bd[0], rfc_conn_info->bd[1],rfc_conn_info->bd[2], rfc_conn_info->bd[3],rfc_conn_info->bd[4], rfc_conn_info->bd[5]);
+		if(hlp_bda_cmp(bda, rfc_conn_info->bd) &&
+			(rfc_conn_info->server_channel == channel))
+		{
+			break;
+		}
+		rfc_conn_info = LNEXT(rfc_conn_info);
+	}
+	LEAVE_CRITICAL(s_rfc_connection_lock);
+	return rfc_conn_info;
+}
+static rfc_server_info_t * rfc_server_get_by_channel(int channel)
+{
+	ENTER_CRITICAL(s_srv_info_lock);
+    rfc_server_info_t*head = g_rfc_server_info_list.head;
+	if(!IS_CHANNEL_VALID(channel))
+	{
+		LEAVE_CRITICAL(s_srv_info_lock);
+		return NULL;
+	}
+        while(head != NULL) {
+            SPP_DBG("input(%x),server node's rfc_srv_channel(%x)",channel,head->rfc_srv_channel);
+            if (head->rfc_srv_channel == channel) {
+                break;
+            }
+            head = LNEXT(head);
+        }
+	 LEAVE_CRITICAL(s_srv_info_lock);
+        return head;
+}
+
+static rfc_server_info_t * rfc_server_get_by_uuid(UINT8* puuid)
+{
+    ENTER_CRITICAL(s_srv_info_lock);   
+    rfc_server_info_t * rfc_srv_info = g_rfc_server_info_list.head;
+    while (rfc_srv_info) { 
+        if (0 == memcmp(puuid, rfc_srv_info->rfc_srv_uuid128,16)) {
+            break;
+        }
+        rfc_srv_info = LNEXT(rfc_srv_info);
+    }
+    
+    if (rfc_srv_info != NULL) {
+	 LEAVE_CRITICAL(s_srv_info_lock);
+        return rfc_srv_info;
+    } else {
+       LEAVE_CRITICAL(s_srv_info_lock);
+        return NULL;
+    }
+}
+
+static rfc_server_info_t * rfc_server_get_by_srv_hdl(DWORD srv_hdl)
+{
+	rfc_server_info_t *rfc_srv_info;
+	ENTER_CRITICAL(s_srv_info_lock);   
+	rfc_srv_info = LIST_FIND(&g_rfc_server_info_list, rfc_server_info_t *, rfc_srv_sdp_handle, srv_hdl);
+	LEAVE_CRITICAL(s_srv_info_lock);
+	return rfc_srv_info;
+}
+static rfc_connection_info_t * rfc_server_conn_get_first(struct ListStru *conn_list)
+{
+	return conn_list->head;;
+}
+static rfc_connection_info_t * rfc_server_conn_get_by_handle(struct ListStru *conn_list, DWORD handle)
+{
+	rfc_connection_info_t * rfc_conn_info;
+	rfc_conn_info = LIST_FIND(conn_list, rfc_connection_info_t *, handle, handle);
+	return rfc_conn_info;
+}
+
+void hlp_uuid_trans_a_to_b(UINT8 *srv_uuid, struct SDAP_UUIDStru* uuidStru)
+{
+	int i = 0;
+/*	
+	for(i = 0; i < 4; i++)
+	{
+		SPP_DBG("uuid--%02x, %02x, %02x, %02x", srv_uuid[4*i], srv_uuid[4*i+1], srv_uuid[4*i+2], srv_uuid[4*i+3]);
+	}
+*/	
+	uuidStru->Data1 = srv_uuid[3] + (srv_uuid[2] << 8) + (srv_uuid[1] << 16) + (srv_uuid[0] << 24);
+	uuidStru->Data2 = srv_uuid[5] + (srv_uuid[4] << 8);
+	uuidStru->Data3 = srv_uuid[7] + (srv_uuid[6] << 8);
+	
+	memcpy(uuidStru->Data4,srv_uuid + 8,  8);
+}
+
+void hlp_uuid_trans_b_to_a(struct SDAP_UUIDStru* uuidStru, UINT8 *srv_uuid)
+{
+	int i = 0;
+	for(i = 0; i < 4; i++)
+	{
+		srv_uuid[i] = uuidStru->Data1 >> (8 * (3 - i));
+	}
+	
+	srv_uuid[5] = uuidStru->Data2 & 0xFF;
+	srv_uuid[4] = (uuidStru->Data2 >> 8) & 0xFF;
+	srv_uuid[7] = uuidStru->Data3 & 0xFF;
+	srv_uuid[6] = (uuidStru->Data3 >> 8) & 0xFF;
+	
+	memcpy(srv_uuid + 8, uuidStru->Data4, 8);
+}
+
+static DWORD  hlp_register_sdp_service(CHAR *srv_name,UINT8 channel)
+{
+	struct SDAP_SPPInfoStru info = {0};
+    info.svr_chnl = channel;
+	UINT32 ret = SDAP_RegisterSPPService(srv_name, &info);	
+	SPP_DBG("register spp server normal-ret=%d",ret);
+	return info.svc_hdl;
+}
+
+static DWORD  hlp_register_sdp_service_ex(UINT8 channel, UINT8 *uuid_128, CHAR *name)
+{
+    WORD ret;
+    struct SDAP_SPPInfoStru info = {0};
+    struct SDAP_UUIDStru uuidStru;
+    info.svr_chnl = channel;
+    hlp_uuid_trans_a_to_b(uuid_128, &uuidStru);
+    ret = SDAP_RegisterSPPBasedServiceWithUUID(name, &info,  &uuidStru);
+    SPP_DBG("1 register spp server ex-ret=%d",ret);
+    if (ret == BT_SUCCESS && is_iap2_uuid(uuid_128)) {
+        struct SDAP_DIInfoStru *pnp_attr = (struct SDAP_DIInfoStru *)NEW((sizeof(struct SDAP_DIInfoStru) - 1));
+        memset(pnp_attr, 0, (sizeof(struct SDAP_DIInfoStru) - 1));
+        pnp_attr->size = sizeof(struct SDAP_DIInfoStru) - 1;
+        pnp_attr->spec_id = 0x0103;
+#ifdef CONFIG_FOR_PTS
+		pnp_attr->vendor_id = 0x08E7;
+#else
+		pnp_attr->vendor_id = 0x23A1;
+#endif	
+	   	pnp_attr->product_id = 0x0111;
+        pnp_attr->version = 0x0103;
+
+        if(custom_vid){
+            pnp_attr->vendor_id = custom_vid;
+        }
+        if(custom_pid){
+            pnp_attr->product_id = custom_pid;
+        }
+        if(custom_ver){
+            pnp_attr->version = custom_ver;
+        }
+
+        pnp_attr->vendor_id_src = 0x0001;
+        pnp_attr->list_size = 0;
+		pnp_attr->mask = DI_MASK_PRIMARY_TRUE;
+        ret = SDAP_RegisterDIService((UCHAR*)"Device ID", pnp_attr);
+        SPP_DBG("2 register spp server ex-ret=%d",ret);
+        FREE(pnp_attr);
+    }
+    return info.svc_hdl;
+}
+
+static void ev_rfc_register_dlci_cfm(void *param,UINT8 is_server)
+{	
+	struct RFCOMM_RegServerDLCIStru *par = param;	
+	DWORD dlci_svchdl = 0;
+	rfc_server_info_t *srv_info;
+	
+	/*
+	fixme : handle the case that registering  failed.
+	*/
+	SPP_DBG("ev_rfc_register_dlci_cfm,chanle(0x%x)",par->server_channel);
+	srv_info = rfc_server_get_by_channel(par->server_channel);
+	if(srv_info == NULL)
+	{
+        SPP_DBG("fatal error. srv_info is null");
+        return;
+	}
+	srv_info->rfc_srv_sdp_handle = hlp_register_sdp_service_ex(srv_info->rfc_srv_channel, srv_info->rfc_srv_uuid128, srv_info->rfc_srv_name);
+	
+	SPP_DBG("svc handle =0x%x", srv_info->rfc_srv_sdp_handle );
+	g_rfc_callbacks->start_server_cb(rfc_server_status_success,srv_info,is_server);
+}
+
+static void ev_rfc_connection_ind(void * param)
+{
+    struct RFCOMM_ConnectEvStru *in = (struct RFCOMM_ConnectEvStru *)param;
+    rfc_server_info_t *srv_info = rfc_server_get_by_channel(in ->server_channel);
+    SPP_DBG("server channel(0x%04x)",in->server_channel);
+//fix 24UL someone AA phone auto reconnect
+#if 0 //zjgtest
+    if(get_rfcomm_dis_timer(in->bd)){
+    	SPP_DBG("[24UL]reject aa phone rfcomm reconnect!");
+    	in->result = ER_RFCOMM_L2CAP_CONNECT_FAILED;
+    	RFCOMM_Connect_Rsp(in);
+        return;
+    }
+#endif
+    
+    if (srv_info) {
+    	in->result = ER_RFCOMM_SUCCESS;
+    	RFCOMM_Connect_Rsp(param);
+	event_spp_indication(EV_APP_SPP_CONNECTING, srv_info);
+    } else {
+    	SPP_DBG("fatal error: rfc_info is null (server channel may not be registered, so reject the connect request)\n");
+    	in->result = ER_RFCOMM_L2CAP_CONNECT_FAILED;
+    	RFCOMM_Connect_Rsp(in);
+    }
+}
+/*
+local is rfcomm server. 
+*/
+static void ev_rfc_connection_complete_server(void *param)
+{
+	struct RFCOMM_ConnectEvStru *con_ev = param;
+	if (con_ev->result == ER_RFCOMM_SUCCESS)
+	{
+		rfc_connection_info_t *srv_conn_info;
+		rfc_server_info_t *srv_info = rfc_server_get_by_channel(con_ev->server_channel);
+		if(NULL == srv_info)
+		{
+			SPP_DBG(" fatal error: server info not found by sdp service handle ");
+			return ;
+		}
+		srv_conn_info = List_NodeNew( sizeof(rfc_connection_info_t));
+	
+		hlp_bda_copy(srv_conn_info->bd, con_ev->bd);
+		srv_conn_info->server_channel = con_ev->server_channel;
+		srv_conn_info->handle = con_ev->handle;
+		srv_conn_info->mfs = con_ev->mfs;
+		srv_conn_info->credit_outgoing = con_ev->credit_outgoing;
+		srv_conn_info->credit_incoming = con_ev->credit_incoming;
+		srv_conn_info->conn_state = rfc_conn_state_connected;
+		srv_conn_info->role = rfc_conn_role_server;
+		List_AddHead(&(srv_info->rfc_conn_list), srv_conn_info);
+		SPP_DBG(" connect handle (0x%04x)",srv_conn_info->handle);
+		
+		//todo :callback to notify connection success
+		g_rfc_callbacks->connect_cb(0,srv_conn_info, rfc_server_status_success,TRUE);
+
+	} 
+	else
+	{
+		SPP_DBG("fatal error: remote connect to local failed");
+		//todo: callback to notify connection failure.
+		g_rfc_callbacks->connect_cb(0, NULL, rfc_server_status_fail,TRUE);
+	}
+}
+static void ev_rfc_connection_complete(void *param)
+{
+	/*
+	g_current_socket_fd identify the context who initiate the rfcomm connection request.
+	*/
+	int socket_fd = g_current_socket_fd;
+	struct RFCOMM_ConnectEvStru *con_ev = param;
+
+	map_channel_to_context_t * map_info = g_map_channel_to_context_list.head;
+	SPP_DBG("******-------------******");
+	while(map_info)
+	{
+		SPP_DBG("addrA:%x:%x:%x:%x:%x:%x\n", map_info->bd[0], map_info->bd[1], map_info->bd[2], map_info->bd[3], map_info->bd[4], map_info->bd[5]);
+		if(hlp_bda_cmp(map_info->bd, con_ev->bd) &&
+			(map_info->server_channel == con_ev->server_channel))
+		{
+			break;
+		}
+		map_info = LNEXT(map_info);
+	}
+
+	
+	g_current_socket_fd = 0;
+       SPP_DBG("rfc_connection_complete,result=%d",con_ev->result);
+	if (con_ev->result == ER_RFCOMM_SUCCESS)
+	{
+		rfc_connection_info_t *rfc_info = List_NodeNew( sizeof(rfc_connection_info_t));
+		
+		hlp_bda_copy(rfc_info->bd, con_ev->bd);
+		rfc_info->server_channel = con_ev->server_channel;
+		rfc_info->handle = con_ev->handle;
+		rfc_info->mfs = con_ev->mfs;
+		rfc_info->credit_outgoing = con_ev->credit_outgoing;
+		rfc_info->credit_incoming = con_ev->credit_incoming;
+		rfc_info->conn_state = rfc_conn_state_connected;
+		rfc_info->role = rfc_conn_role_client;
+
+		if(map_info){
+			memcpy(rfc_info->rfc_srv_uuid128, map_info->rfc_srv_uuid128, 16);
+		}else{
+			SPP_DBG("NOT find channel to uuid ....");
+		}
+		
+
+		SPP_DBG("mfs=%d, init  credit_outgoing=%d, credit_incoming=%d,handle=0x%x",rfc_info->mfs , rfc_info->credit_outgoing, rfc_info->credit_incoming,rfc_info->handle);
+		ENTER_CRITICAL(s_rfc_connection_lock);
+		List_AddHead(&g_rfc_connection_list, rfc_info);
+		LEAVE_CRITICAL(s_rfc_connection_lock);
+
+		//todo :callback to notify connection success
+		g_rfc_callbacks->connect_cb(socket_fd,rfc_info, rfc_status_success,FALSE);
+	} 
+	else
+	{
+        	rfc_connection_info_t  rfc_info;
+		hlp_bda_copy(rfc_info.bd, con_ev->bd);
+		rfc_info.server_channel = con_ev->server_channel;
+		rfc_info.handle = con_ev->handle;
+		rfc_info.mfs = con_ev->mfs;
+		rfc_info.credit_outgoing = con_ev->credit_outgoing;
+		rfc_info.credit_incoming = con_ev->credit_incoming;
+		rfc_info.conn_state = rfc_conn_state_disconnected;
+		rfc_info.role = rfc_conn_role_client;
+		//todo: callback to notify connection failure.
+		g_rfc_callbacks->connect_cb(socket_fd,&rfc_info, rfc_status_fail,FALSE);
+	}
+
+	{
+		
+		if(map_info)
+		{
+			SPP_DBG("*************SUCCESS....channel=%d, context=%d",  map_info->server_channel, map_info->context);
+			socket_fd = map_info->context;
+			List_RemoveAt(&g_map_channel_to_context_list, map_info);
+			LFREE(map_info);
+			
+		}
+		else
+		{
+			SPP_DBG("*************ERROR....");
+		}
+		
+	}
+}
+/*
+ rfcomm connection(local server) is disconnected.
+*/
+static void ev_rfc_disconnection_complete_server(void *param)
+{
+
+	rfc_connection_info_t *srv_conn_info;
+	struct RFCOMM_ConnectEvStru *con_ev = param;
+	rfc_server_info_t *srv_info = rfc_server_get_by_channel(con_ev->server_channel);
+
+	if(srv_info == NULL)
+	{
+		SPP_DBG("fatal error. srv_info is null");
+		return;
+	}
+	 srv_conn_info = rfc_server_conn_get_by_handle(&(srv_info->rfc_conn_list),  con_ev->handle);
+
+	if(srv_conn_info)
+	{
+		UINT32 disconnected_handle = con_ev->handle;
+		g_rfc_callbacks->disconnect_cb(con_ev->bd, srv_conn_info, rfc_server_status_success,TRUE);
+		//todo: callback to notify disconnect complete
+		List_RemoveAt(&(srv_info->rfc_conn_list), srv_conn_info);
+		LFREE(srv_conn_info);
+
+		srv_conn_info =  rfc_server_conn_get_first(&(srv_info->rfc_conn_list));
+		if((srv_conn_info == NULL) &&
+			(srv_info->rfc_srv_sdp_handle == 0))
+		{
+			//sdp is already unreged, no connection exists. so to unreg server channel;
+			struct RFCOMM_RegServerDLCIStru *par = NEW(sizeof(struct RFCOMM_RegServerDLCIStru));
+			par->server_channel = srv_info->rfc_srv_channel;
+			par->auto_credit = TRUE;
+			par->init_credit = CONFIG_CREDIT;
+			par->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;
+			RFCOMM_UnRegServer(par);
+                    SPP_DBG(" *************fatal error.");
+			ENTER_CRITICAL(s_srv_info_lock);
+			List_RemoveAt(&g_rfc_server_info_list, srv_info);
+			LEAVE_CRITICAL(s_srv_info_lock);
+		}
+	}
+	else
+	{
+		//should never come into here.
+		//fixme:
+	}
+	
+}
+/*
+ rfcomm connection(local client) is disconnected.
+*/
+static void ev_rfc_disconnection_complete(void *param)
+{
+	struct RFCOMM_ConnectEvStru *con_ev = param;
+	// rfc_connection_info_t * rfc_info = hlp_rfc_conn_info_get_by_bda_channel(con_ev->bd, con_ev->server_channel);
+ 	rfc_connection_info_t * rfc_info = hlp_rfc_conn_info_get_by_hdl(con_ev->handle);
+	if(rfc_info)
+	{
+		UINT32 connection_handle = rfc_info->handle;
+		//todo: callback to notify disconnect complete		
+		g_rfc_callbacks->disconnect_cb(con_ev->bd, rfc_info, rfc_status_success,FALSE);
+		ENTER_CRITICAL(s_rfc_connection_lock);
+		List_RemoveAt(&g_rfc_connection_list, rfc_info);
+		LEAVE_CRITICAL(s_rfc_connection_lock);
+		LFREE(rfc_info);
+	}
+	else
+	{
+		//should never come into here.
+		SPP_DBG("fatal error: rfc_info is null");
+	}
+	
+}
+
+static void ev_rfc_data_ind(void *param)
+{
+	UINT32 handle = (UINT32)(CAST_TO_INTPTR)*HDLPTR(param);
+	UINT32 data_size = DATASIZE(param);
+
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+	if(rfc_info)
+	{
+		if (*((UINT8 *)(BUFDATA(param) - 2))) 
+		{/* Outgoing Credit */
+			rfc_info->credit_outgoing += *((UINT8 *)(BUFDATA(param) - 2));/* Notice, increased outgoing credit */
+		}
+		
+		SPP_DBG("mfs=%d, update credit_outgoing=%d, credit_incoming=%d,size(%d)",rfc_info->mfs , rfc_info->credit_outgoing, rfc_info->credit_incoming,data_size);
+		
+		if(data_size > 0 ) 
+		{
+			unsigned char *p_spp_data = (unsigned char *)NEW(data_size + 2);
+			p_spp_data[0] = data_size & 0xff;
+			p_spp_data[1] = ((data_size >> 8) & 0xff);
+			memcpy(p_spp_data+2, BUFDATA(param), data_size);
+			//todo: callback to notify data.
+	            //hlp_spp_data_ind_cbk
+			g_rfc_callbacks->receive_cb(rfc_info->bd, handle, p_spp_data);
+			//
+			FREE(p_spp_data);
+		}
+	}
+	else
+	{
+		//should never come into here.
+		SPP_DBG("fatal error ( or connection_local_server): rfc_info is null");
+	}
+}
+/* Internal Functions */
+static void hlp_rf_callback_dispatch_server(UCHAR msg_id, void *param)
+{
+	SPP_DBG("hlp_rf_callback_dispatch_server %d", msg_id);
+	switch (msg_id) {
+		case RFCOMM_EV_REGSERVER_DLCI_CFM:
+			ev_rfc_register_dlci_cfm(param,TRUE);
+			break;
+		case RFCOMM_EV_CONNECT_IND:
+			ev_rfc_connection_ind(param);
+			break;
+		case RFCOMM_EV_CONNECT_COMPLETE:
+			ev_rfc_connection_complete_server(param);
+			break;
+		case RFCOMM_EV_DISCONNECT_COMPLETE:
+			ev_rfc_disconnection_complete_server(param);
+			break;
+		case RFCOMM_EV_DATA_IND:
+			ev_rfc_data_ind(param);
+		    break;
+		case RFCOMM_EV_UIH_FC_IND:
+			break;
+		case RFCOMM_EV_UIH_MSC_IND:
+			break;
+		case RFCOMM_EV_UIH_MSC_CFM:
+			break;				
+		default:
+	    		break;
+	}
+	
+	if(param && (msg_id != RFCOMM_EV_CONNECT_IND)) 
+	{
+		FREE(param);
+	}
+	else
+	{
+		//when RFCOMM_EV_CONNECT_IND, param is freed by RFCOMM_Connect_Rsp.
+	}
+}
+
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Description:
+	This routine is called by the RFCOMM. RFCOMM is at the highest level of 
+	bluetooth protocol module. It will receive the packet from the lower level,
+	then call it to notify the further higher level(Port Emulation).These packets
+	consist of confirmations and indications. 
+Arguments:
+	msgid	the type of packet
+	param	pointer to packet contents
+	
+Return Value:
+	none
+---------------------------------------------------------------------------*/
+static void hlp_rf_callback_dispatch(UCHAR msg_id, void *param)
+{
+	SPP_DBG("[hlp_rf_callback_dispatch] %d\n", msg_id);
+	
+	switch (msg_id) {
+		case RFCOMM_EV_REGSERVER_DLCI_CFM:
+			ev_rfc_register_dlci_cfm(param,FALSE);
+			break;
+		case RFCOMM_EV_CONNECT_IND:
+			SPP_DBG(" fatal error: should not come into here. ");
+			break;
+		case RFCOMM_EV_CONNECT_COMPLETE:
+			ev_rfc_connection_complete(param);
+			break;
+		case RFCOMM_EV_DISCONNECT_COMPLETE:
+			ev_rfc_disconnection_complete(param);
+			break;
+		case RFCOMM_EV_DATA_IND:
+			ev_rfc_data_ind(param);
+			break;
+		case RFCOMM_EV_UIH_FC_IND:
+			break;
+		case RFCOMM_EV_UIH_MSC_IND:
+			break;
+		case RFCOMM_EV_UIH_MSC_CFM:
+			break;				
+		default:
+			break;
+	}
+	
+	if(param && (msg_id != RFCOMM_EV_CONNECT_IND)) {
+		FREE(param);
+	}
+	else
+	{
+		//when RFCOMM_EV_CONNECT_IND, param is freed by RFCOMM_Connect_Rsp.
+	}
+}
+
+static void hlp_spp_get_service_info_cbk(void *app_context, UCHAR *bd, WORD status, WORD svc_type, struct SDAP_GeneralInfoStru *general_sdx_info)
+{
+	struct SDAP_SPPInfoStru *sdx_info = (struct SDAP_SPPInfoStru *)general_sdx_info;
+	SPP_DBG("App_Spp_GetServiceInfo_Cbk bd 0x%x  status %d",bd[0],status);
+	if ((status == ERROR_SDAP_SUCCESS) && (sdx_info)) {
+		struct RFCOMM_ConnectStru *req;
+		req = NEW(sizeof(struct RFCOMM_ConnectStru));
+		memcpy(req->bd, bd, 6);
+		//req->server_channel = sdx_info != NULL ? sdx_info->svr_chnl : 0;
+		req->server_channel = sdx_info->svr_chnl ;
+		req->cbk = (void *)hlp_rf_callback_dispatch;
+		req->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;////APP_SPP_RFCOMM_MFS;
+		req->init_credit = 0;	/* max_credits will be reported to remote when connection complete */
+		req->auto_credit = TRUE;
+		RFCOMM_Connect_Req(req);
+	} else {
+		SPP_DBG("hlp_spp_get_service_info_cbk error");
+		//todo : callback to notify spp connection failure.
+		#ifdef RFC_SERVER_SUPPORT
+		//g_rfc_callbacks->connect_cb(bd, INVALID_RFC_HANDLE, INVALID_RFC_CHN, rfc_status_fail,FALSE);
+		#endif
+	}
+}
+
+module_event_cbk_t hlp_event_spp_cbk = NULL;
+void event_spp_indication(unsigned int event, void *param)
+{
+    if (hlp_event_spp_cbk != NULL) {
+        hlp_event_spp_cbk((PROFILE_ID_SPP << 8) |event, param);
+    }
+}
+ static void hlp_spp_start_server_cbk(int status,void* server_info,UINT8 is_server)
+ {
+    rfc_srv_info_t rs;
+    rfc_server_info_t *srv_info = NULL;
+    if (server_info == NULL) {
+        SPP_DBG("hlp_spp_start_server_cbk,NULL!");
+        return ;
+    }
+    srv_info = (rfc_server_info_t*)server_info;
+    if (is_server) {
+        event_spp_indication(EV_APP_SRV_RFC_SERVER_STARTED,srv_info);
+    } else {
+        SPP_DBG("hlp_spp_start_server_cbk,local is client!");
+        memset(&rs, 0, sizeof(rfc_srv_info_t));
+        rs.status = status;
+        rs.local_server_channel =  srv_info->rfc_srv_channel;
+        rs.sdp_handle = srv_info->rfc_srv_sdp_handle;
+        //event_spp_indication(EV_APP_SPP_SERVER_STARTED, &rs);
+    }
+ }
+void hlp_spp_connect_cbk(int socket_fd,void* conn_info_t,  int status,UINT8 server)
+ {
+    UINT8* p_uuid = NULL;
+    rfc_connection_info_t * conn_info = NULL;
+    if (conn_info_t == NULL) {
+        SPP_DBG("hlp_spp_connect_cbk,connection info is NULL,connect fail!!");
+        return;
+    }
+    conn_info = (rfc_connection_info_t *)conn_info_t;
+    p_uuid = app_rfc_get_srv_uuid_by_handle(conn_info->handle);
+	
+	if(p_uuid != NULL){
+		SPP_DBG("conn_info->handle=0x%x, p_uuid = %2x%2x%2x%2x ",conn_info->handle, p_uuid[15],p_uuid[14],p_uuid[0],p_uuid[1]);
+	
+		if( is_iap2_uuid(p_uuid)){
+			SPP_DBG("iap2_server_uuid memcmp = 0 ");
+			 bt_remote_device_t *p_node = hlp_manager_find_target_device(conn_info->bd);
+			 if(p_node!=NULL){
+			 	bt_remote_device_t *p_node_temp = NULL;
+				p_node_temp = (bt_remote_device_t *)NEW(sizeof(bt_remote_device_t));
+				memcpy(p_node_temp, p_node, sizeof(bt_remote_device_t));
+				SPP_DBG("find device, p_node->uuid.uuid_len = %d\r\n", p_node->uuid.uuid_len);
+				if(p_node_temp->uuid.uuid_len == 0){
+					UINT8 buff[32] ={
+						0xFF,0xCA,0xCA,0xDE,0xAF,0xDE,0xCA,0xDE,0xDE,0xCA,0xFA,0xDE,0x00,0x00,0x00,0x00,
+						0x1a,0x29,0xea,0xab,0x01,0x73,0xbc,0x88,0x1c,0x45,0x4d,0xe1,0x66,0x24,0x8d,0x2d
+						};
+					SPP_DBG("uuid.uuid_len =0  ");
+					p_node_temp->uuid.uuid_len =32;
+					memset(&p_node_temp->uuid.uuid,0,32);
+	               		memcpy(&p_node_temp->uuid.uuid,buff,32);	
+				} else{
+					SPP_DBG("p_node->uuid.uuid_len = %d", p_node_temp->uuid.uuid_len);
+				}
+				p_node_temp->carplay = 0x01;
+				SPP_DBG("inser uuid and set p_node->carplay=0x01");
+				hlp_manager_insert_uuid(p_node_temp);
+				FREE(p_node_temp);
+			 }
+		}
+
+		if(memcmp(p_uuid, aa_server_uuid, SERVER_UUID_LEN) == 0) {
+			//save aa conn_info_t
+			memcpy(aa_conn_info.bd, conn_info->bd, BD_ADDR_LEN);
+			memcpy(aa_conn_info.rfc_srv_uuid128, conn_info->rfc_srv_uuid128, 16);
+			aa_conn_info.conn_state= conn_info->conn_state;
+			aa_conn_info.handle = conn_info->handle;
+			aa_conn_info.server_channel= conn_info->server_channel;
+			SPP_DBG("save aap_conn_info conn_state:%d, handle:0x%x, server_channel:%x", 
+				aa_conn_info.conn_state, aa_conn_info.handle, aa_conn_info.server_channel);
+		} else if(is_iap2_uuid(p_uuid) || memcmp(p_uuid,iap2_client_uuid,SERVER_UUID_LEN) == 0) {
+			//save iap2 conn_info_t
+			memcpy(iap2_conn_info.bd, conn_info->bd, BD_ADDR_LEN);
+			memcpy(iap2_conn_info.rfc_srv_uuid128, conn_info->rfc_srv_uuid128, 16);
+			iap2_conn_info.conn_state= conn_info->conn_state;
+			iap2_conn_info.handle = conn_info->handle;
+			iap2_conn_info.server_channel= conn_info->server_channel;
+			SPP_DBG("save iap2_conn_info conn_state:%d, handle:0x%x, server_channel:%x", 
+				iap2_conn_info.conn_state, iap2_conn_info.handle, iap2_conn_info.server_channel);
+		}
+		
+	}else{
+		SPP_DBG("p_uuid = NULL");
+		return ;
+	}
+	if(1){
+		hlp_spp_set_status(ST_SPP_CONNECTED);
+		 SPP_DBG("EV_APP_SRV_RFC_CONNECT_RET event");
+        event_spp_indication(EV_APP_SRV_RFC_CONNECT_RET,conn_info_t);	 
+    } else {//IAP2 or SPP go this way.
+        rfc_connection_info_t ri;
+
+        memset(&ri, 0, sizeof(rfc_connection_info_t));
+        ri.conn_state = status;
+        if (conn_info_t != NULL) {
+            memcpy(ri.bd, conn_info->bd,BD_ADDR_LEN);
+            ri.handle = conn_info->handle;
+            ri.server_channel = conn_info->server_channel;
+   
+            event_spp_indication(EV_APP_SPP_CONNECT_RET, &ri);
+            if (status == rfc_status_success) {
+                UINT16 mfs  = app_spp_get_mfs(conn_info->handle);
+                event_spp_indication(EV_APP_SPP_MAX_FRAME_SIZE, &mfs);
+            }
+        }
+		SPP_DBG("server is false ");
+    }
+}
+ void hlp_spp_stop_server_cbk(int status,void* server_info)
+{
+    SPP_DBG("hlp_spp_stop_server_cbk,status(%d),",status);
+    event_spp_indication(EV_APP_SRV_RFC_SERVER_STOPPED,server_info);
+}
+void hlp_spp_disconnect_cbk(UINT8 *bd,void* conn_info, int status,UINT8 server)
+{
+    UINT8* p_uuid = NULL;
+    rfc_connection_info_t* disc = (rfc_connection_info_t*)conn_info;
+    p_uuid = app_rfc_get_srv_uuid_by_handle(disc->handle);
+	if(p_uuid == NULL){
+		SPP_DBG("p_uuid = NULL");
+		return ;
+	}
+	if(1){
+        event_spp_indication(EV_APP_SRV_RFC_DISCONNECT_RET, conn_info);
+    } else {
+        struct spp_connect_info_str info;
+        if (bd == NULL) {
+            SPP_DBG("hlp_spp_disconnect_cbk,NULL BD_ADDR!");
+            UINT8 *bd_addr = app_rfc_get_address_by_handle(disc->handle);
+            if (bd_addr ) {
+                memcpy(info.bd_addr,bd_addr,BD_ADDR_LEN);
+            } else {
+                SPP_DBG("hlp_spp_disconnect_cbk,Can't Find device!");
+            }
+        } else {
+            memcpy(info.bd_addr,bd,BD_ADDR_LEN);
+        }
+        info.handle = disc->handle;
+        info.status = status;
+        event_spp_indication(EV_APP_SPP_DISCONNECT_RET, (void *)&info);
+    }
+}
+
+void hlp_spp_send_cbk(UINT8 *bd, UINT32 handle, int status)
+{
+    if ((status == rfc_status_success) || (status == rfc_server_status_success))
+    {
+        event_spp_indication(EV_APP_SPP_SEND_DATA_RET, (void *)(CAST_TO_INTPTR)handle);
+    } else {
+        event_spp_indication(EV_APP_SPP_SEND_DATA_RET, NULL);
+    }
+}
+
+void hlp_spp_data_ind_cbk(UINT8 *bd, UINT32 handle, unsigned char *data)
+{
+    UINT8* p_uuid = NULL;
+    struct app_spp_data_ind_stru data_ind = {0};
+    SPP_DBG("hlp_spp_data_ind_cbk!handle;%x", handle);
+    memcpy(data_ind.bd,bd,BD_ADDR_LEN);
+    data_ind.handle = handle;
+    data_ind.data_len = (data[0] | (data[1]<<8 & 0xff00) );
+    data_ind.data = data+2;
+//zjgtest
+//    p_uuid = app_rfc_get_srv_uuid_by_handle(handle);
+//	if(p_uuid == NULL){
+//		SPP_DBG("p_uuid = NULL");
+//		return ;
+//	}
+	
+	if(1){
+        event_spp_indication(EV_APP_SRV_RFC_DATA_IND, &data_ind);
+    } else{
+        event_spp_indication(EV_APP_SPP_DATA_IND, &data_ind);
+    }
+}
+
+rfc_callbacks_t s_app_spp_cbk = {
+	hlp_spp_start_server_cbk,
+	hlp_spp_stop_server_cbk,
+	hlp_spp_connect_cbk,
+	hlp_spp_disconnect_cbk,
+	hlp_spp_send_cbk,
+	hlp_spp_data_ind_cbk,
+};
+
+void app_spp_init(module_event_cbk_t event_cbk)
+{
+    SPP_DBG("app_spp_init");
+    g_rfc_callbacks = &s_app_spp_cbk;
+
+    s_srv_info_lock = CREATE_CRITICAL(NULL);
+    g_rfc_server_info_list.head = NULL;
+    g_rfc_server_info_list.tail = NULL;
+	
+    s_rfc_connection_lock = CREATE_CRITICAL(NULL);
+    g_rfc_connection_list.head = NULL;
+    g_rfc_connection_list.tail = NULL;
+
+    g_app_rfcomm_fsminst = FsmInstNew(0, app_rfcomm_inst_name);
+    hlp_event_spp_cbk = event_cbk;
+    hlp_spp_set_status(ST_SPP_INIT);
+}
+
+void hlp_unregister_rfcomm_server_channel_cb(void)
+{
+	SPP_DBG("unreg rfcomm server channel cb");
+}
+void hlp_unregister_rfcomm_server_channel(UINT8 srv_channel)
+{
+	struct RFCOMM_RegServerDLCIStru *par = NEW(sizeof(struct RFCOMM_RegServerDLCIStru));
+	par->server_channel = srv_channel;
+	par->auto_credit = TRUE;
+	par->init_credit = CONFIG_CREDIT;
+	par->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;
+	par->cbk = (void *)NULL;
+	RFCOMM_UnRegServer(par);
+}
+void hlp_register_rfcomm_server_channel(UINT8 srv_channel)
+{
+    struct RFCOMM_RegServerDLCIStru *par = NEW(sizeof(struct RFCOMM_RegServerDLCIStru));
+    par->server_channel = srv_channel;
+    par->auto_credit = TRUE;
+    par->init_credit = CONFIG_CREDIT;
+    par->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;
+    par->cbk = (void *)hlp_rf_callback_dispatch_server;
+    RFCOMM_RegServer(par);
+    SPP_DBG("reg rfc server channel");
+    hlp_spp_set_status(ST_SPP_READY);
+}
+/*
+fixme: we assume sdp record associated with this channel has not been registered.
+
+*/
+static void hlp_proc_rfc_server_start_ex(struct FsmInst *fi, unsigned char event, void *arg)
+{
+/* ------------------------------------------------------------------------ */
+	rfc_server_info_t *srv_info;
+	UINT32  channel = app_spp_get_server_channel();//((msg_rfc_server_start_ex_t *)arg)->channel;
+	char        srv_name[MAX_RFC_SERVER_NAME_LEN];
+	UINT8    srv_uuid[16];
+
+
+	memcpy(srv_name, ((msg_rfc_server_start_ex_t *)arg)->srv_name, MAX_RFC_SERVER_NAME_LEN);
+	memcpy(srv_uuid, ((msg_rfc_server_start_ex_t *)arg)->srv_uuid, 16);
+
+	srv_info = rfc_server_get_by_uuid(srv_uuid);
+    
+	if(srv_info == NULL)
+	{
+		srv_info = (rfc_server_info_t *)List_NodeNew(sizeof(rfc_server_info_t));
+		//List_AddTail(&g_rfc_server_info_list, srv_info);
+        SPP_DBG("#hlp_proc_rfc_server_start_ex,add!");
+	}
+	else
+	{
+		//sdp record already registered.
+		SPP_DBG("already registerd uuid ");
+		event_spp_indication(EV_APP_SRV_RFC_SERVER_STARTED,srv_info);
+
+		FREE(arg);
+		return;
+	}
+
+
+	memcpy(srv_info->rfc_srv_uuid128, srv_uuid, 16);
+	memcpy(srv_info->rfc_srv_name, srv_name, MAX_RFC_SERVER_NAME_LEN);
+	srv_info->rfc_srv_name[MAX_RFC_SERVER_NAME_LEN] = 0;
+	srv_info->rfc_srv_channel = channel;
+
+	SPP_DBG("srv_info->rfc_srv_uuid128 = %2x%2x%2x%2x ",srv_info->rfc_srv_uuid128[15],srv_info->rfc_srv_uuid128[14],srv_info->rfc_srv_uuid128[0],srv_info->rfc_srv_uuid128[1]);
+	ENTER_CRITICAL(s_srv_info_lock);
+	List_AddTail(&g_rfc_server_info_list, srv_info);
+	LEAVE_CRITICAL(s_srv_info_lock);
+		
+	SPP_DBG("to reg rfc server channel:%x", srv_info->rfc_srv_channel);
+	hlp_register_rfcomm_server_channel(channel);
+
+	FREE(arg);
+}
+
+/*
+Param: 
+	channel: server channel. its range is 1-30.
+		     the channel shall be get int app_spp_get_server_channel(void)
+		       we can assume this channel has not been allocated.
+*/
+void app_spp_server_start_ex(UINT32 channel, char * srv_name, UINT8 *srv_uuid)
+{
+	int srv_name_len_set;
+	int srv_name_len = strlen(srv_name);
+	msg_rfc_server_start_ex_t *msg_server_start_ex = NEW(sizeof(msg_rfc_server_start_ex_t));
+	if(NULL == msg_server_start_ex)
+	{
+		SPP_DBG("fatal error");
+		return ;
+	}
+	/*
+	Fixme: 
+	we should  not using the channel passed in , but  a unregistered channel got dynamicly. 
+	*/
+	msg_server_start_ex->channel = channel;
+	
+
+	srv_name_len_set = (srv_name_len > MAX_RFC_SERVER_NAME_LEN)  ? MAX_RFC_SERVER_NAME_LEN : srv_name_len;
+	if(srv_name)
+	{
+		memcpy(msg_server_start_ex->srv_name, srv_name, srv_name_len_set);
+	}
+
+	memcpy(msg_server_start_ex->srv_uuid, srv_uuid, 16);
+	
+	FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_SERVER_START_EX, hlp_proc_rfc_server_start_ex, (void *)msg_server_start_ex);
+
+	
+	return ;	
+}
+
+static void hlp_proc_rfc_server_start(struct FsmInst *fi, unsigned char event, void *arg)
+{
+    struct RFCOMM_RegServerDLCIStru *par = NEW(sizeof(struct RFCOMM_RegServerDLCIStru));
+
+    //g_is_start_server_ex = 0;
+
+    SPP_DBG("app_spp_server_start");
+    par->server_channel = 1;
+    par->auto_credit = TRUE;
+    par->init_credit = CONFIG_CREDIT;
+    par->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;
+    par->cbk = (void *)hlp_rf_callback_dispatch;
+    RFCOMM_RegServer(par);
+}
+
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Description:
+	This function is called by upper application to startup a SPP service on
+	the local device.
+Arguments: 
+	local_attrib[IN]		pointer to a struct SPP_LocalAttr variable.
+							If the server channel and service values are illegal,
+							the value will be allocated by lower function.
+							If user do not know which COM port is available, set this 
+							value to zeor and this value will be allocated by lower
+							function.
+Return Value:
+	If the function fails, the return value is NULL; otherwise, the return value
+	is a pointer to a SPP_InfoStru structure (which is changed to UCHAR* pointer
+	before the function returns.)
+---------------------------------------------------------------------------*/
+void app_spp_server_start(void)
+{
+    FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_SERVER_START, hlp_proc_rfc_server_start, NULL);
+}
+
+void app_spp_server_start_use_uuid(void)
+{
+    UINT16 svr_channel;
+    UINT8 spp_uuid[16] = {0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb};
+    char spp_name[4] = "SPP";
+    svr_channel = app_spp_get_server_channel();
+    app_spp_server_start_ex(svr_channel, spp_name, spp_uuid);
+}
+static void hlp_proc_rfc_server_stop_ex(struct FsmInst *fi, unsigned char event, void *arg)
+{
+    rfc_connection_info_t *srv_conn;
+    msg_rfc_server_stop_t *msg_server_stop = arg;
+    rfc_server_info_t *srv_info = rfc_server_get_by_srv_hdl(msg_server_stop->rfc_srv_sdp_handle);
+
+    if(NULL == srv_info)
+    {
+    	SPP_DBG(" fatal error: server info not found by sdp service handle ");
+    	return ;
+    }
+    SPP_DBG("*********hlp_proc_rfc_server_stop_ex-***--msg_server_stop->rfc_srv_handle = %d ", msg_server_stop->rfc_srv_sdp_handle);
+
+    SPP_DBG(" fix me: we assume sdp unreg is always success. ");
+    SDAP_ServiceUnregister(msg_server_stop->rfc_srv_sdp_handle);
+    srv_info->rfc_srv_sdp_handle = 0x00;
+
+    g_rfc_callbacks->stop_server_cb(rfc_server_status_success,srv_info);
+    
+    srv_conn = rfc_server_conn_get_first(&(srv_info->rfc_conn_list));
+
+    if(srv_conn == NULL)
+    {
+        //unregister rfcomm server channel will disconnect existing connection.
+        //when there already have connection exists, we should allow unregister that sdp service without disconnection. 
+        //we unregister the server channel only when no connection exists.
+        struct RFCOMM_RegServerDLCIStru *par = NEW(sizeof(struct RFCOMM_RegServerDLCIStru));
+        par->server_channel = srv_info->rfc_srv_channel;
+        par->auto_credit = TRUE;
+        par->init_credit = CONFIG_CREDIT;
+        par->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;
+        RFCOMM_UnRegServer(par);
+		
+	  ENTER_CRITICAL(s_srv_info_lock);
+        List_RemoveAt(&g_rfc_server_info_list, srv_info);
+	  LEAVE_CRITICAL(s_srv_info_lock);
+        SPP_DBG("No connection exist,unreg rfcomm.");
+    }
+    /*unregister spp service.*/
+    FREE(arg);
+}
+
+void app_spp_server_stop_ex(DWORD rfc_srv_sdp_handle)
+{
+
+	msg_rfc_server_stop_t *msg_server_stop = NEW(sizeof(msg_rfc_server_stop_t));
+	if(NULL == msg_server_stop)
+	{
+		return ;
+	}
+	msg_server_stop->rfc_srv_sdp_handle = rfc_srv_sdp_handle;
+
+	FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_SERVER_STOP_EX, hlp_proc_rfc_server_stop_ex, (void *)msg_server_stop);
+	SPP_DBG("app_spp_server_stop_ex------fsm internal");
+	
+	return ;	
+}
+static void hlp_proc_rfc_server_stop(struct FsmInst *fi, unsigned char event, void *arg)
+{
+	struct RFCOMM_RegServerDLCIStru *par = NEW(sizeof(struct RFCOMM_RegServerDLCIStru));
+	
+	//SPP_DBG("*********hlp_proc_rfc_server_stop-***--g_srv_handle=%d ", g_srv_handle);
+	
+
+	SPP_DBG("fix me: we assume sdp unreg is always success.");
+	//SDAP_ServiceUnregister(g_srv_handle);
+	//g_srv_handle = 0;
+
+
+	/*unregister spp service.*/
+
+	g_rfc_callbacks->stop_server_cb(rfc_status_success,NULL);
+
+	FREE(arg);
+	FREE(par);
+}
+
+void app_spp_server_stop(void)
+{
+/*
+	msg_rfc_server_stop_t *msg_server_stop = NEW(sizeof(msg_rfc_server_stop_t));
+	if(NULL == msg_server_stop)
+	{
+		return ;
+	}
+
+	FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_SERVER_STOP, hlp_proc_rfc_server_stop, (void *)msg_server_stop);
+	//SPP_DBG("app_spp_send_data------fsm internal \n");
+*/	
+	g_rfc_callbacks->stop_server_cb(rfc_status_success,NULL);
+
+	return ;	
+}
+
+
+/*
+Description:
+	Connection SPP Serivce's rfcomm server channel.
+	
+Param:
+	
+*/
+
+static void hlp_proc_rfc_connect_ex(struct FsmInst *fi, unsigned char event, void *arg)
+{
+    UINT8 bd_addr[6];
+    UINT8 uuid_128[16];
+    int socket_fd;
+
+    socket_fd = ((msg_rfc_connect_ex_t *)arg)->socket_fd;
+    memcpy( bd_addr, ((msg_rfc_connect_ex_t *)arg)->bd_addr, 6);
+    memcpy( uuid_128, ((msg_rfc_connect_ex_t *)arg)->uuid_128, 16);
+
+    SPP_DBG("*********hlp_proc_rfc_connect_ex ");
+
+    /* connect rfcomm by service uuid. */
+    struct SDAP_UUIDStru uuidStru;
+    rfc_sdp_context_info_t *context = NEW(sizeof(rfc_sdp_context_info_t));
+    hlp_uuid_trans_a_to_b(uuid_128, &uuidStru);
+    if(NULL == context) {
+        SPP_DBG(" fatal error: memory allocate failed. ");
+    }
+    context->socket_fd = socket_fd;
+    context->server_channle_cnt = 0;
+    memcpy(context->bd_addr,bd_addr,6);
+    memcpy(context->uuid_128,uuid_128,16);
+    RFC_Discover(bd_addr, (UINT8 *)(&uuidStru), (void *)context, RFC_Sdp_EventCbk);
+    FREE(arg);
+}
+
+/*
+
+Description:
+	Connection SPP Serivce's rfcomm server channel.
+
+Param:
+
+*/
+
+void app_spp_connect_ex(int socket_fd, UINT8* bd_addr, UINT8 *uuid_128)
+{
+    UINT32 handle = app_rfc_get_handle_by_uuid(uuid_128);
+    if (handle == 0) {
+        msg_rfc_connect_ex_t *msg_connect_ex = NEW(sizeof(msg_rfc_connect_ex_t));
+        if(NULL == msg_connect_ex)
+        {
+            return ;
+        }
+        msg_connect_ex->socket_fd = socket_fd;
+        memcpy(msg_connect_ex->bd_addr, bd_addr, 6);
+        memcpy(msg_connect_ex->uuid_128, uuid_128, 16);
+
+        FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_CONNECT_EX, hlp_proc_rfc_connect_ex, (void *)msg_connect_ex);
+		//hlp_spp_set_status(ST_SPP_CONNECTING);
+        //event_spp_indication(EV_APP_SPP_CONNECTING,(void*)bd_addr);
+        SPP_DBG("app_spp_connect_ex------fsm internal \n");
+    } else {
+        rfc_connection_info_t ri;
+
+        memset(&ri, 0, sizeof(rfc_connection_info_t));
+        ri.conn_state = rfc_server_status_fail;
+        memcpy(ri.bd, bd_addr, sizeof(ri.bd));
+        ri.handle = 0;
+        ri.server_channel = 0;
+		memcpy(ri.rfc_srv_uuid128,uuid_128,16);
+        event_spp_indication(EV_APP_SRV_RFC_CONNECT_RET, &ri);
+        SPP_DBG("app_spp_connect_ex------status fail!\n");
+    }
+}
+
+static void hlp_proc_rfc_connect_channel(struct FsmInst *fi, unsigned char event, void *arg)
+{
+	UINT8 bd_addr[6];
+	int socket_fd;
+	UINT8 channel;
+	struct RFCOMM_ConnectStru *req = NULL;
+
+	SPP_DBG("*********hlp_proc_rfc_connect_channel ");
+	
+	socket_fd = ((msg_rfc_connect_channel_t *)arg)->socket_fd;
+	memcpy( bd_addr, ((msg_rfc_connect_channel_t *)arg)->bd_addr, 6);
+	channel = ((msg_rfc_connect_channel_t *)arg)->channel;
+
+	if(( rfc_connection_info_t * )NULL != hlp_rfc_conn_info_get_by_bda_channel(bd_addr, channel))
+	{
+		SPP_DBG("the remote channel already connected.");
+		//g_rfc_callbacks->connect_cb(socket_fd, bd_addr, INVALID_RFC_HANDLE, INVALID_RFC_CHN, rfc_status_fail,FALSE);
+		return;
+	}
+	
+	req = NEW(sizeof(struct RFCOMM_ConnectStru));
+	memcpy(req->bd, bd_addr, 6);
+	req->server_channel = channel;
+	req->cbk = (void *)hlp_rf_callback_dispatch;
+	req->mfs = CONFIG_RFCOMM_DEFAULT_MTU - 6;////APP_SPP_RFCOMM_MFS;
+	req->init_credit = 0;	/* max_credits will be reported to remote when connection complete */
+	req->auto_credit = TRUE;
+
+	g_current_socket_fd = socket_fd;
+	RFCOMM_Connect_Req(req);
+	
+	FREE(arg);
+}
+/*
+
+Description:
+	Connection SPP Serivce's rfcomm server channel.
+
+Param:
+
+*/
+
+void app_spp_connect_channel(int socket_fd, UINT8* bd_addr, UINT8 channel)
+{
+	msg_rfc_connect_channel_t *msg_connect_ex = NEW(sizeof(msg_rfc_connect_channel_t));
+	if(NULL == msg_connect_ex)
+	{
+		return ;
+	}
+
+	msg_connect_ex->socket_fd = socket_fd;
+	memcpy(msg_connect_ex->bd_addr, bd_addr, 6);
+	msg_connect_ex->channel = channel;
+	
+	FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_CONNECT_CHANNEL, hlp_proc_rfc_connect_channel, (void *)msg_connect_ex);
+	SPP_DBG("app_spp_connect_ex------fsm internal");
+	
+	return ;	
+}
+static void hlp_proc_rfc_connect(struct FsmInst *fi, unsigned char event, void *arg)
+{
+	UINT8 bd_addr[6];
+	memcpy( bd_addr, ((msg_rfc_app_connect_t *)arg)->bd_addr, 6);
+	
+	//SPP_DBG("*********hlp_proc_rfc_connect ");
+	if(NULL ==  bd_addr)
+	{
+		//fixme: 
+	}
+	else
+	{
+		//SPP_DBG("1");
+		if(!hlp_rfc_conn_info_is_connected(bd_addr))
+		{
+			//SPP_DBG("2");
+			SDAP_GetServiceInfoBDReq(bd_addr, CLS_SERIAL_PORT, NULL, 0, (void *)1, (SDAP_GetServiceInfoBDRsp_Func *)hlp_spp_get_service_info_cbk);
+			//SPP_DBG("3");
+		}
+		else
+		{
+			//only on spp rfcomm connection supported.
+			//todo : 
+			rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_bda(bd_addr);
+			//SPP_DBG("4");
+			if(rfc_info->conn_state == rfc_conn_state_connected)
+			{
+
+			}
+			else
+			{
+				//in connecting or disconnecting
+			}
+		}
+	}
+	
+	FREE(arg);
+}
+
+void app_spp_connect(UINT8* bd_addr)
+{
+	msg_rfc_app_connect_t *msg_connect = NEW(sizeof(msg_rfc_app_connect_t));
+	if(NULL == msg_connect)
+	{
+		return ;
+	}
+
+	memcpy(msg_connect->bd_addr, bd_addr, 6);
+	
+	FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_CONNECT, hlp_proc_rfc_connect, (void *)msg_connect);
+	SPP_DBG("app_spp_connect------fsm external \n");
+	
+
+}
+
+
+static void hlp_proc_rfc_disconnect(struct FsmInst *fi, unsigned char event, void *arg)
+{
+    UINT32 handle = ((msg_rfc_disconnect_t *)arg)->handle;
+    SPP_DBG("hlp_proc_rfc_disconnect,handle(0x%04x)",handle);
+	
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+      SPP_DBG("hlp_proc_rfc_disconnect2\n");
+	if (rfc_info != NULL)
+	{
+		struct RFCOMM_DisconnectReqStru *t_param = NEW(sizeof(struct RFCOMM_DisconnectReqStru));
+		t_param->handle = rfc_info->handle;
+		//t_praram will be free by stack. 
+		SPP_DBG("rfchlp_proc_rfc_disconnect info exsit!!");
+		RFCOMM_Disconnect_Req(t_param);
+	}
+	else
+	{
+		//todo:
+		SPP_DBG("rfchlp_proc_rfc_disconnect info is NULL!!");
+		//g_rfc_callbacks->disconnect_cb(NULL, handle, rfc_status_fail,FALSE);
+	}
+	FREE(arg);
+}
+
+void app_spp_disconnect(UINT8*bd,UINT32 handle)
+{    
+    SPP_DBG("app_spp_disconnect,addr[%02X:%02X:%02X:%02X:%02X:%02X],handle(0x%04x) \n",
+        bd[5], bd[4], bd[3], bd[2], bd[1], bd[0], handle);
+    if (handle != 0) {
+        msg_rfc_disconnect_t *msg_disconnect = NEW(sizeof(msg_rfc_disconnect_t));
+        if (NULL == msg_disconnect) {
+        	return;
+        }
+        msg_disconnect->handle = handle;
+        rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+        if(rfc_info != NULL){
+            if(hlp_spp_get_status() > ST_SPP_READY && hlp_spp_get_status() != ST_SPP_DISCONNECTING){
+                SPP_DBG("app_spp_disconnecting !\n");
+                hlp_spp_set_status(ST_SPP_DISCONNECTING);
+                //bt_event_indicate(BT_EV_PROFILE_SPP_DISCONNECTING,(void *)bd);
+            }
+            FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_DISCONNECT, hlp_proc_rfc_disconnect, (void *)msg_disconnect);
+        }else{
+            hlp_spp_set_status(ST_SPP_READY);
+            SPP_DBG("app_spp_disconnect has been disconnected!\n");
+            //bt_event_indicate(BT_EV_PROFILE_SPP_DISCONNECTED,(void *)bd);
+        }
+    }else{
+        hlp_spp_set_status(ST_SPP_READY);
+        SPP_DBG("app_spp_disconnect has been disconnected!\n");
+        //bt_event_indicate(BT_EV_PROFILE_SPP_DISCONNECTED,(void *)bd);
+    }
+}
+
+void app_spp_disconnect_rfcomm(UINT8*bd, UINT32 handle)
+{    
+    SPP_DBG("app_spp_disconnect_rfcomm,addr[%02X:%02X:%02X:%02X:%02X:%02X],handle(0x%04x) \n",
+        bd[5], bd[4], bd[3], bd[2], bd[1], bd[0], handle);
+    if (handle != 0) {
+        msg_rfc_disconnect_t *msg_disconnect = NEW(sizeof(msg_rfc_disconnect_t));
+        if (NULL == msg_disconnect){
+        	return;
+        }
+        msg_disconnect->handle = handle;
+        rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+        if(rfc_info != NULL){
+            SPP_DBG("[rfcomm]app_spp_disconnecting!\n");
+            if(hlp_spp_get_status() > ST_SPP_READY && hlp_spp_get_status() != ST_SPP_DISCONNECTING){
+                hlp_spp_set_status(ST_SPP_DISCONNECTING);
+                //bt_event_indicate(BT_EV_PROFILE_SPP_DISCONNECTING,(void *)bd);
+            }
+            FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_DISCONNECT, hlp_proc_rfc_disconnect, (void *)msg_disconnect);
+        }else{
+            hlp_spp_set_status(ST_SPP_READY);
+            SPP_DBG("app_spp_disconnect has been disconnected!\n");
+            //bt_event_indicate(BT_EV_PROFILE_SPP_DISCONNECTED,(void *)bd);
+        }
+    }else{
+        SPP_DBG("[rfcomm]app_spp_disconnect has been disconnected!\n");
+        hlp_spp_set_status(ST_SPP_READY);
+        //bt_event_indicate(BT_EV_PROFILE_SPP_DISCONNECTED,(void *)bd);
+    }
+}
+
+void app_rfc_server_disconnect(UINT32 handle)
+{
+    msg_rfc_disconnect_t *msg_disconnect = NEW(sizeof(msg_rfc_disconnect_t));
+    if (NULL == msg_disconnect) {
+    	return;
+    }
+    msg_disconnect->handle = handle;
+    SPP_DBG("app_rfc_server_disconnect,handle(0x%04x) \n",handle);
+    FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_DISCONNECT, hlp_proc_rfc_disconnect, (void *)msg_disconnect);
+}
+
+/*
+Description:
+	get maximum frame size of the connection. 
+	
+Return Value:
+	  maximum frame size.
+*/
+UINT16  app_spp_get_mfs(UINT32 handle)
+{
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+	if(rfc_info)
+	{
+		return rfc_info->mfs;
+	}
+	else
+	{
+		SPP_DBG("fatal error: rfc_info is null");
+		return 0;
+	}
+}
+
+/*
+Description:
+	get remaining out credit of the connection. 
+	
+Return Value:
+	   0:  no credit
+	 -1 : no connection
+*/
+int app_spp_get_out_credit(UINT32 handle)
+{
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+	if(rfc_info)
+	{
+		return rfc_info->credit_outgoing;
+	}
+	else
+	{
+		SPP_DBG("fatal error: rfc_info is null");
+		return -1;
+	}
+}
+
+int app_spp_credit_decrement(UINT32 handle)
+{
+	rfc_connection_info_t *rfc_info =  hlp_rfc_conn_info_get_by_hdl(handle);
+	if(rfc_info)
+	{
+		rfc_info->credit_outgoing--;
+                SPP_DBG("after decrement credit_outgoing is %d", rfc_info->credit_outgoing);
+	}
+	else
+	{
+		SPP_DBG("fatal error: rfc_info is null");
+		return -1;
+	}
+	return 0;
+}
+
+static void hlp_proc_rfc_send_data(struct FsmInst *fi, unsigned char event, void *arg)
+{
+	UINT32 handle;
+	struct BuffStru *data;
+	rfc_connection_info_t *rfc_info;
+	handle = ((msg_rfc_send_data_t *)arg)->handle;
+	data =  ((msg_rfc_send_data_t *)arg)->data;
+	SPP_DBG("hlp_proc_rfc_send_data");
+	rfc_info = hlp_rfc_conn_info_get_by_hdl(handle);
+	if(rfc_info)
+	{	
+		struct BuffStru *buff;
+
+		int data_size = DATASIZE(data);
+		int len = MIN(data_size, rfc_info->mfs);
+		rfc_info->credit_outgoing--;
+		
+		while(len > 0)
+		{
+			//SPP_DBG("while start");
+			buff = RFCOMM_DataNew(len, 0, handle);
+			memcpy(BUFDATA(buff), BUFDATA(data), len);/* BUFDATA(buf), actual data */
+			//SPP_DBG("*********userlen=%d, stacklen=%d", len, DATASIZE(buff));
+			SPP_DBG("mfs=%d,credit_outgoint=%d,credit_incoming=%d,userlen=%d,stacklen=%d",
+                			rfc_info->mfs , rfc_info->credit_outgoing, rfc_info->credit_incoming, len, DATASIZE(buff));
+			RFCOMM_Data_Req(buff);
+			//SPP_DBG("while continue ...");
+			data->off += len;
+			data_size = DATASIZE(data);
+			len = MIN(data_size, rfc_info->mfs);
+			//SPP_DBG("while end");
+		}
+
+		g_rfc_callbacks->send_cb(rfc_info->bd, handle, rfc_status_success);
+	}
+	else
+	{
+		//todo:
+		g_rfc_callbacks->send_cb(NULL, handle, rfc_status_fail);
+	}
+    FREE(data);
+    FREE(arg);
+
+}
+/*
+Description:
+	befor sending data the caller shall call app_spp_get_out_credit to check if there is remaining credit
+	and call app_spp_get_mfs to get the maxium frame size.
+*/
+void app_spp_send_data(UINT32 handle, struct BuffStru *data)	
+{
+
+	msg_rfc_send_data_t *msg_send_data = NEW(sizeof(msg_rfc_send_data_t));
+	if(NULL == msg_send_data)
+	{
+		return ;
+	}
+	if(handle) {
+		msg_send_data->handle =  handle;
+		msg_send_data->data = BuffCopy(data);
+
+		//app_spp_credit_decrement(handle);//credit_outgoing--
+
+		//zjgtest
+		//FsmEventCx(g_app_rfcomm_fsminst, APP_RFC_SEND_DATA, hlp_proc_rfc_send_data, (void *)msg_send_data);
+		FsmEvent_ExternalCx(g_app_rfcomm_fsminst, APP_RFC_SEND_DATA, hlp_proc_rfc_send_data, (void *)msg_send_data);
+
+		//SPP_DBG("app_spp_send_data------fsm internal \n");
+	} else {
+		SPP_DBG("app_spp_send_data err rfc_info in NULL");
+	}
+	return ;
+}
+/*
+Description:
+	get a local rfcomm server channel not registered;
+
+*/
+int app_spp_get_server_channel(void)
+{
+	return RFCOMM_GET_CHANNEL(); 
+}
+
+UINT32 app_spp_get_handle()
+{
+    return s_spp_handle;
+}
+
+void app_spp_set_handle(UINT32 handle)
+{
+    s_spp_handle = handle;
+}
+
+UINT32 app_rfc_get_handle_by_address(UINT8* bd_addr)
+{
+    SPP_DBG("app_rfc_get_handle_by_address[%02x:%02x:%02x:%02x:%02x:%02x]",bd_addr[5],bd_addr[4],bd_addr[3],bd_addr[2],bd_addr[1],bd_addr[0]);
+    ENTER_CRITICAL(s_rfc_connection_lock);
+    rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+    while (rfc_conn_info) { 
+        if (0 == memcmp(bd_addr, rfc_conn_info->bd,BD_ADDR_LEN)) {
+            break;
+        }
+        rfc_conn_info = LNEXT(rfc_conn_info);
+    }
+    LEAVE_CRITICAL(s_rfc_connection_lock);
+	
+    ENTER_CRITICAL(s_srv_info_lock);
+    if (rfc_conn_info == NULL) {
+            SPP_DBG("app_rfc_get_handle_by_address,connection list is NULL!");
+		rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+		while(srv_info)
+		{   
+			rfc_conn_info = srv_info->rfc_conn_list.head;
+			while(rfc_conn_info)
+			{ 	
+                         SPP_DBG("info address[%02x:%02x:%02x:%02x:%02x:%02x]",
+                            rfc_conn_info->bd[5],rfc_conn_info->bd[4],
+                            rfc_conn_info->bd[3],rfc_conn_info->bd[2],
+                            rfc_conn_info->bd[1],rfc_conn_info->bd[0]);
+                    
+				if (0 == memcmp(bd_addr,rfc_conn_info->bd,BD_ADDR_LEN))
+				{
+					break;
+				}
+				rfc_conn_info = LNEXT(rfc_conn_info);
+			}
+			if (rfc_conn_info)
+			{
+				break;
+			}
+			srv_info = LNEXT(srv_info);
+		}
+    }
+    if (rfc_conn_info != NULL) {
+	 LEAVE_CRITICAL(s_srv_info_lock);
+        return rfc_conn_info->handle;
+    } else {
+        LEAVE_CRITICAL(s_srv_info_lock);
+        return 0;
+    }
+}
+
+UINT32 app_rfc_get_other_handle_by_address(UINT8* bd_addr, UINT32	cmp_handle)
+{
+    SPP_DBG("app_rfc_get_handle_by_address[%02x:%02x:%02x:%02x:%02x:%02x]",bd_addr[5],bd_addr[4],bd_addr[3],bd_addr[2],bd_addr[1],bd_addr[0]);
+    ENTER_CRITICAL(s_rfc_connection_lock);
+    rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+    while (rfc_conn_info) { 
+        if (0 == memcmp(bd_addr, rfc_conn_info->bd,BD_ADDR_LEN) && (rfc_conn_info->handle != cmp_handle)) {
+            break;
+        }
+        rfc_conn_info = LNEXT(rfc_conn_info);
+    }
+    LEAVE_CRITICAL(s_rfc_connection_lock);
+	
+    ENTER_CRITICAL(s_srv_info_lock);
+    if (rfc_conn_info == NULL) {
+            SPP_DBG("app_rfc_get_handle_by_address,connection list is NULL!");
+		rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+		while(srv_info)
+		{   
+			rfc_conn_info = srv_info->rfc_conn_list.head;
+			while(rfc_conn_info)
+			{ 	
+                         SPP_DBG("info address[%02x:%02x:%02x:%02x:%02x:%02x]",
+                            rfc_conn_info->bd[5],rfc_conn_info->bd[4],
+                            rfc_conn_info->bd[3],rfc_conn_info->bd[2],
+                            rfc_conn_info->bd[1],rfc_conn_info->bd[0]);
+                    
+				if ((0 == memcmp(bd_addr,rfc_conn_info->bd,BD_ADDR_LEN)) && (rfc_conn_info->handle != cmp_handle))
+				{
+					break;
+				}
+				rfc_conn_info = LNEXT(rfc_conn_info);
+			}
+			if (rfc_conn_info)
+			{
+				break;
+			}
+			srv_info = LNEXT(srv_info);
+		}
+    }
+    if (rfc_conn_info != NULL) {
+	LEAVE_CRITICAL(s_srv_info_lock);
+        return rfc_conn_info->handle;
+    } else {
+    LEAVE_CRITICAL(s_srv_info_lock);
+        return 0;
+    }
+}
+
+UINT32 app_rfc_get_handle_by_uuid(UINT8* puuid)
+{
+    ENTER_CRITICAL(s_rfc_connection_lock);
+    rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+    while (rfc_conn_info) { 
+        if (0 == memcmp(puuid, rfc_conn_info->rfc_srv_uuid128,16)) {
+            break;
+        }
+        rfc_conn_info = LNEXT(rfc_conn_info);
+    }
+    
+    if (rfc_conn_info != NULL) {
+	  LEAVE_CRITICAL(s_rfc_connection_lock);
+        return rfc_conn_info->handle;
+    } else {
+        LEAVE_CRITICAL(s_rfc_connection_lock);
+        return 0;
+    }
+}
+
+UINT32  rfc_server_get_handle_by_channel(int channel)
+{
+    ENTER_CRITICAL(s_rfc_connection_lock);
+    rfc_connection_info_t*head = g_rfc_connection_list.head;
+	if(!IS_CHANNEL_VALID(channel))
+	{
+	     LEAVE_CRITICAL(s_rfc_connection_lock);
+		return NULL;
+	}
+        while(head != NULL) {
+            SPP_DBG("input(%x),server node's server_channel(%x)",channel,head->server_channel);
+            if (head->server_channel == channel) {
+                break;
+            }
+            head = LNEXT(head);
+        }
+	 LEAVE_CRITICAL(s_rfc_connection_lock);
+        return head ? head->handle : 0;
+}
+
+UINT32 app_rfc_get_srv_sdp_handle_by_uuid(UINT8* puuid)
+{
+	ENTER_CRITICAL(s_srv_info_lock);
+    rfc_server_info_t * rfc_srv_info = g_rfc_server_info_list.head;
+    while (rfc_srv_info) { 
+        if (0 == memcmp(puuid, rfc_srv_info->rfc_srv_uuid128,16)) {
+            break;
+        }
+        rfc_srv_info = LNEXT(rfc_srv_info);
+    }
+    
+    if (rfc_srv_info != NULL) {
+		LEAVE_CRITICAL(s_srv_info_lock);
+        return rfc_srv_info->rfc_srv_sdp_handle;
+    } else {
+    LEAVE_CRITICAL(s_srv_info_lock);
+        return 0;
+    }
+}
+UINT8* app_rfc_get_address_by_handle(UINT32 handle)
+{
+    SPP_DBG("app_rfc_get_address_by_handle");
+    ENTER_CRITICAL(s_rfc_connection_lock);
+    rfc_connection_info_t * rfc_conn_info = g_rfc_connection_list.head;
+    while (rfc_conn_info) { 	
+        SPP_DBG("input handle(0x%x),read handle(0x%x),state(%d)",handle,rfc_conn_info->handle,rfc_conn_info->conn_state);
+        if (handle == rfc_conn_info->handle) {
+            break;
+        }
+        rfc_conn_info = LNEXT(rfc_conn_info);
+    }
+    LEAVE_CRITICAL(s_rfc_connection_lock);
+    ENTER_CRITICAL(s_srv_info_lock);
+    if (rfc_conn_info == NULL) {
+        //SPP_DBG("connection list is NULL!!!!");
+        rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+        while (srv_info) {
+            rfc_conn_info = srv_info->rfc_conn_list.head;
+            while (rfc_conn_info) { 	
+                if (handle == rfc_conn_info->handle) {
+                	break;
+                }
+                rfc_conn_info = LNEXT(rfc_conn_info);
+            }
+            if (rfc_conn_info) {
+                break;
+            }
+            srv_info = LNEXT(srv_info);
+        }
+    }
+ 	LEAVE_CRITICAL(s_srv_info_lock);
+    return (rfc_conn_info != NULL)?rfc_conn_info->bd:NULL;
+}
+UINT8* app_rfc_get_srv_uuid_by_handle(UINT32 handle)
+{
+	ENTER_CRITICAL(s_rfc_connection_lock);
+    rfc_connection_info_t * rfc_conn_info = NULL;
+    
+	rfc_conn_info = g_rfc_connection_list.head;
+	   while (rfc_conn_info) { 	
+	       if (handle == rfc_conn_info->handle) {
+	            break;
+	        }
+	        rfc_conn_info = LNEXT(rfc_conn_info);
+	    }
+	if(rfc_conn_info != NULL) {
+		LEAVE_CRITICAL(s_rfc_connection_lock);
+		return rfc_conn_info->rfc_srv_uuid128;
+	}
+      LEAVE_CRITICAL(s_rfc_connection_lock);
+	ENTER_CRITICAL(s_srv_info_lock);
+	rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+	while (srv_info) {
+        rfc_conn_info = srv_info->rfc_conn_list.head;
+        while (rfc_conn_info) { 	
+            if (handle == rfc_conn_info->handle) {
+                break;
+            }
+            rfc_conn_info = LNEXT(rfc_conn_info);
+        }
+        if (rfc_conn_info) {
+            break;
+        }
+        srv_info = LNEXT(srv_info);
+    }
+	LEAVE_CRITICAL(s_srv_info_lock);
+    return srv_info != NULL?srv_info->rfc_srv_uuid128:NULL;
+}
+
+UINT32 app_rfc_srv_get_head_handle()
+{
+ENTER_CRITICAL(s_srv_info_lock);
+    rfc_connection_info_t * rfc_conn_info = NULL;
+    rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+    while (srv_info) {
+        rfc_conn_info = srv_info->rfc_conn_list.head;
+        if (rfc_conn_info) { 	
+                break;
+        }
+        srv_info = LNEXT(srv_info);
+    }
+	LEAVE_CRITICAL(s_srv_info_lock);
+    return rfc_conn_info != NULL?rfc_conn_info->handle:0;
+}
+UINT8 app_rfc_srv_get_connect_count()
+{
+    UINT8 count = 0;
+	ENTER_CRITICAL(s_srv_info_lock);
+    rfc_connection_info_t * rfc_conn_info = NULL;
+    rfc_server_info_t *srv_info = g_rfc_server_info_list.head;
+    while (srv_info) {
+        rfc_conn_info = srv_info->rfc_conn_list.head;
+        while (rfc_conn_info) { 	
+            count++;
+            rfc_conn_info = LNEXT(rfc_conn_info);
+        }
+        srv_info = LNEXT(srv_info);
+    }
+	LEAVE_CRITICAL(s_srv_info_lock);
+    SPP_DBG("app_rfc_srv_get_connect_count(%d)",count);
+    return count;
+}
+rfc_server_info_t* app_rfc_srv_get_by_channel(int channel)
+{
+    return rfc_server_get_by_channel(channel);
+}
+
+void app_init_cp_vendor_info(UINT8 type, UINT16 value)
+{
+    switch(type){
+        case CP_INFO_VID:
+            custom_vid = value;
+            break;
+        case CP_INFO_PID:
+            custom_pid = value;
+            break;
+        case CP_INFO_VER:
+            custom_ver = value;
+            break;
+        default:
+            SPP_DBG("other unknow type!");
+            break;
+    }
+}
+
+UINT32 app_get_aa_conn_handle()
+{
+	return aa_conn_info.handle;
+}
+
+UINT32 app_get_iap2_conn_handle()
+{
+	return iap2_conn_info.handle;
+}
+
+UINT8* app_get_aa_conn_address()
+{
+	return aa_conn_info.bd;
+}
+
+UINT8* app_get_iap2_conn_address()
+{
+	return iap2_conn_info.bd;
+}
+
+void app_clean_aa_conn_info()
+{
+
+}
+
+void app_clean_iap2_conn_info()
+{
+
+}
+
+UINT8 is_iap2_uuid(UINT8 *uuid128)
+{
+	if(memcmp(uuid128, iap2_server_uuid, SERVER_UUID_LEN) == 0)
+		return 1;
+	else
+		return 0;
+}
+
+UINT8 is_aa_uuid(UINT8 *uuid128)
+{
+	if(memcmp(uuid128, aa_server_uuid, SERVER_UUID_LEN) == 0)
+		return 1;
+	else
+		return 0;
+}
+
+
+void spp_profile_init(module_event_cbk_t event_cbk)
+{
+    app_spp_init(event_cbk);
+}
+
+void spp_profile_done()
+{
+	FREE_CRITICAL(s_srv_info_lock);
+	FREE_CRITICAL(s_rfc_connection_lock);
+}
+
+static void spp_profile_start()
+{
+    SPP_DBG("spp_profile_start IAP2");
+    app_spp_server_start_ex(1,"IAP2",iap2_server_uuid);
+
+    SPP_DBG("spp_profile_start AA");
+    app_spp_server_start_ex(2,"AA",aa_server_uuid);
+}
+
+static void spp_profile_stop()
+{
+    app_spp_server_stop();
+}
+
+profile_t g_spp_profile = {
+    spp_profile_init,
+    spp_profile_done,
+    spp_profile_start,
+    spp_profile_stop,
+};

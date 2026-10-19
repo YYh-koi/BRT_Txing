@@ -1,0 +1,37 @@
+#ifndef __AT_H__
+#define __AT_H__
+
+#include "porting.h"
+
+#define AT_CMD_REPLY_COMM		 	0x00
+#define AT_CMD_REPLY_SUC 		 	(AT_CMD_REPLY_COMM | 0)
+#define AT_CMD_REPLY_FORMAT_ERR 	(AT_CMD_REPLY_COMM | 1)
+#define AT_CMD_REPLY_NOT_SUPPORT 	(AT_CMD_REPLY_COMM | 2)
+#define AT_CMD_REPLY_BUSY 			(AT_CMD_REPLY_COMM | 3)
+#define AT_CMD_REPLY_STATUS_ERR 	(AT_CMD_REPLY_COMM | 4)
+
+#define AT_CMD_REPLY_HF		 		0x10
+#define AT_CMD_REPLY_HF_CMD_ERR 	(AT_CMD_REPLY_HF | 1)
+#define AT_CMD_REPLY_HF_STATUS_ERR  (AT_CMD_REPLY_HF | 2)
+#define AT_CMD_REPLY_HF_BD_ERR 		(AT_CMD_REPLY_HF | 3)
+
+#define AT_CMD_REPLY_A2DP		 		0x20
+#define AT_CMD_REPLY_A2DP_CMD_ERR 	(AT_CMD_REPLY_A2DP | 1)
+#define AT_CMD_REPLY_A2DP_STATUS_ERR  (AT_CMD_REPLY_A2DP | 2)
+#define AT_CMD_REPLY_A2DP_BD_ERR 		(AT_CMD_REPLY_A2DP | 3)
+
+typedef void (*at_event_callback)(char *event);
+typedef void (*at_event_len_callback)(char *event, unsigned int len);
+
+void at_init();
+void at_cleanup();
+void at_runloop_execute();
+void at_send(char *command);
+
+void do_ssp_pair_remote_addr(UINT8 *addr_buff);
+
+int ATPbap(const char *cmd, int len);
+void pbap_at_buff_init();
+void pbap_at_flag_init();
+#endif
+
